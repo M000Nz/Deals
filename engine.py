@@ -333,7 +333,10 @@ def db() -> sqlite3.Connection:
         con.execute("ALTER TABLE alerts ADD COLUMN notified INTEGER DEFAULT 1")
         con.commit()
     cols = [r[1] for r in con.execute("PRAGMA table_info(stores)")]
-    for col, ddl in (("use_browser", "INTEGER DEFAULT 0"), ("fail_streak", "INTEGER DEFAULT 0"),
+    for col, ddl in (("item", "TEXT"), ("title", "TEXT"), ("price", "TEXT"), ("was_price", "TEXT"), ("link", "TEXT"),
+                     ("enabled", "INTEGER DEFAULT 1"), ("status", "TEXT DEFAULT 'Not tested'"), ("tested_at", "REAL"),
+                     ("custom", "INTEGER DEFAULT 0"),            # very old databases are missing these
+                     ("use_browser", "INTEGER DEFAULT 0"), ("fail_streak", "INTEGER DEFAULT 0"),
                      ("skip_until", "REAL DEFAULT 0"), ("cats", "TEXT DEFAULT 'all'")):
         if col not in cols:
             con.execute(f"ALTER TABLE stores ADD COLUMN {col} {ddl}")
