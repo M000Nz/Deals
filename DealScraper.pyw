@@ -155,7 +155,7 @@ def ensure_deps():
 ensure_deps()
 import engine as E  # noqa: E402
 
-if getattr(E, "ENGINE_VERSION", 0) < 47:
+if getattr(E, "ENGINE_VERSION", 0) < 48:
     _r = tk.Tk()
     _r.withdraw()
     messagebox.showerror("Deals", "engine.py is out of date.\n\nReplace it with the new engine.py from the "
@@ -1085,6 +1085,7 @@ class App(tk.Tk):
                    "was": tkfont.Font(font=(fam, 9, "overstrike"))}
 
         self.q = queue.Queue()
+        self.tray, self._tray_told, self.tray_close = None, False, False
         self._err_count = 0
         self.reg_list, self.scrollers = [], {}
         s = E.get_settings(E.db())
@@ -2774,7 +2775,7 @@ class App(tk.Tk):
                         im.draft("RGB", (self.iw * 2, self.ih * 2))
                     except Exception:  # noqa: BLE001
                         pass
-                    if min(im.size) < 47:                   # a tracking pixel or icon, not a product photo
+                    if min(im.size) < 48:                   # a tracking pixel or icon, not a product photo
                         why.append("too small (placeholder?)")
                         continue
                     return self._prepare(im)
