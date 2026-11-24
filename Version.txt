@@ -1,5 +1,5 @@
-46
+47
 https://github.com/M000Nz/Deals
-note: Dark theme is now the default
-note: Green * added to the Deals logo
-note: Rewritten How it works guide that matches the current app
+note: Deals now has a tray icon (under the hidden icons arrow) that shows what it is doing, including while updating
+note: Right-click the tray icon for Open, Check watchlist now, Quit Deals and Force quit
+note: New setting - close button can keep Deals running in the tray so alerts keep working

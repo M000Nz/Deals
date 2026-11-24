@@ -91,6 +91,8 @@ A result is a deal when at least one of these is true: the shop shows a **was pr
 
 **Sources** - Every shop with a switch, a status and the *reason* it failed if it did. **Test** one shop or all of them.
 
+**System tray** - Deals keeps an icon in the notification area (look under the small ^ arrow by the clock). Its tooltip and menu show what it's doing, including while it checks your watchlist or installs an update. Right-click it for **Open**, **Check watchlist now**, **Quit Deals** and **Force quit**. In **Settings → close button**, choose whether the window's X quits Deals or keeps it running in the tray so alerts keep working.
+
 **Look and feel** - A dark, minimal interface with a single emerald accent, a rounded custom window, smooth scrolling and a light theme if you prefer it (sun/moon toggle, top right).
 
 ### Shortcuts
@@ -163,7 +165,7 @@ python selftest.py            # checks the price reader against saved example pa
 
 1. Raise `ENGINE_VERSION` in `engine.py`, and the matching check in `DealScraper.pyw`.
 2. Put the version on the first line of `Version.txt`, the repository URL on the second, then one `note:` line per change.
-3. Commit and push, then run the **release** workflow (Actions → *Run workflow*) with the tag, e.g. `v46`.
+3. Commit and push, then run the **release** workflow (Actions → *Run workflow*) with the tag, e.g. `v47`.
 
 The workflow builds the app with PyInstaller, runs `--selftest` on the built exe, builds the installer with Inno Setup and publishes `Deals-Setup.exe` with its `.sha256` to the release. `build_exe.bat` is only for local test builds.
 

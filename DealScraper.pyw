@@ -7,6 +7,7 @@ import importlib
 import importlib.util
 import io
 import json
+import ctypes
 import os
 import queue
 import random
@@ -154,7 +155,7 @@ def ensure_deps():
 ensure_deps()
 import engine as E  # noqa: E402
 
-if getattr(E, "ENGINE_VERSION", 0) < 46:
+if getattr(E, "ENGINE_VERSION", 0) < 47:
     _r = tk.Tk()
     _r.withdraw()
     messagebox.showerror("Deals", "engine.py is out of date.\n\nReplace it with the new engine.py from the "
@@ -1149,6 +1150,7 @@ class App(tk.Tk):
         else:
             self.after(700, self.first_run_browser)
         self.after(150, self.pump)
+        self.after(300, self.start_tray)
         self.after(1000, self.tick)
         self.after(5000, self.auto_update_check)
         self.after(60, self.style_window)
@@ -1347,7 +1349,8 @@ class App(tk.Tk):
                           ("hidden sites...", self.open_hidden), ("cashback %...", self.open_cashback),
                           ("check all sources...", self.run_health), ("weekly source check on / off", self.toggle_health),
                           ("export Watchlist report...", self.export_report),
-                          ("run at startup on / off", self.toggle_autostart), None,
+                          ("run at startup on / off", self.toggle_autostart),
+                          ("close button: quit / keep in tray", self.toggle_tray_close), None,
                           ("export data (CSV)...", self.export_data), ("back up database...", self.backup_data),
                           ("restore database...", self.restore_data), None,
                           ("colour pictures on / off", self.toggle_colour), ("light / dark", self.toggle_theme),
@@ -1480,7 +1483,97 @@ class App(tk.Tk):
         lab.bind("<Button-1>", lambda e: cmd())
         return lab
 
+    # ------------------------------------------------------------------ tray --
+    def start_tray(self):
+        """The notification-area icon: shows Deals is running (also while it works or updates in the background)."""
+        self.tray, self._tray_told = None, False
+        self.tray_close = E.get_settings(E.db()).get("tray_close", "0") == "1"
+        if sys.platform != "win32" or "--no-tray" in sys.argv:
+            return
+        base = getattr(sys, "_MEIPASS", None) or os.path.dirname(os.path.abspath(__file__))
+        try:
+            self.tray = ui.Tray(self.on_tray, icon_path=os.path.join(base, "assets", "deals.ico"))
+            if not self.tray.start():
+                log_error("tray icon could not be created")
+                self.tray = None
+        except Exception:  # noqa: BLE001
+            log_error(traceback.format_exc())
+            self.tray = None
+
+    def on_tray(self, name):
+        """Called from the tray thread."""
+        if name == "force":
+            self.force_quit()
+        elif name == "open":
+            self.q.put(self.show_window)
+        elif name == "check":
+            self.q.put(lambda: None if self.scanning else self.start_check())
+        elif name == "quit":
+            threading.Timer(8.0, self.force_quit).start()          # if a clean exit hangs, finish it off
+            self.q.put(self.on_close)
+
+    def tray_status(self, text):
+        if getattr(self, "tray", None):
+            self.tray.status(text)
+
+    def show_window(self):
+        try:
+            if self.state() == "withdrawn":
+                self.deiconify()
+            if self.chrome.on:
+                pending = getattr(self.chrome, "_min_pending", False)
+                ctypes.windll.user32.ShowWindow(self.chrome.hwnd, 9)          # SW_RESTORE
+                if not pending:
+                    self.attributes("-alpha", 0.0)
+                    self.chrome.fade(1.0, 150, start=0.0)
+            else:
+                self.state("normal")
+            self.lift()
+            self.focus_force()
+        except Exception:  # noqa: BLE001
+            log_error(traceback.format_exc())
+
+    def hide_to_tray(self):
+        def go():
+            self.withdraw()
+            try:
+                self.attributes("-alpha", 1.0)
+            except tk.TclError:
+                pass
+            if not self._tray_told:
+                self._tray_told = True
+                self.tray.notify("Deals is still running", "Click the tray icon to open it again, or right-click it to quit.")
+        if self.chrome.on:
+            self.chrome.fade(0.0, 120, then=go)
+        else:
+            go()
+
+    def toggle_tray_close(self):
+        self.tray_close = not self.tray_close
+        E.set_setting(E.db(), "tray_close", "1" if self.tray_close else "0")
+        if self.tray_close and not getattr(self, "tray", None):
+            return messagebox.showinfo("Deals", "The tray icon isn't available here, so the close button will still quit Deals.")
+        messagebox.showinfo("Deals", "The close button now keeps Deals running in the tray (the small arrow by the clock), so "
+                                     "alerts keep working. Right-click the icon to quit." if self.tray_close else
+                            "The close button now quits Deals.")
+
+    def force_quit(self):
+        """Stop Deals immediately, including any background browser, even if the window is hidden or stuck."""
+        try:
+            if getattr(self, "tray", None):
+                self.tray.stop()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            subprocess.Popen(["taskkill", "/F", "/T", "/PID", str(os.getpid())], creationflags=0x08000000)
+            time.sleep(1.0)
+        except Exception:  # noqa: BLE001
+            pass
+        os._exit(0)
+
     def close_clicked(self):
+        if getattr(self, "tray_close", False) and getattr(self, "tray", None) and self.tray.ok:
+            return self.hide_to_tray()
         if self.chrome.on:
             self.chrome.fade(0.0, 120, then=self.on_close)
         else:
@@ -1658,6 +1751,11 @@ class App(tk.Tk):
             E.set_setting(E.db(), "geometry", self.geometry())
         except Exception:  # noqa: BLE001
             pass
+        try:
+            if getattr(self, "tray", None):
+                self.tray.stop()
+        except Exception:  # noqa: BLE001
+            pass
         self.destroy()
 
     def toggle_colour(self):
@@ -1693,6 +1791,7 @@ class App(tk.Tk):
 
     def set_status(self, text):
         self.status_var.set(ui.cap(text))
+        self.tray_status("" if text in ("ready", "") else text)
 
     def set_sort(self, v):
         self.sort = v
@@ -2675,7 +2774,7 @@ class App(tk.Tk):
                         im.draft("RGB", (self.iw * 2, self.ih * 2))
                     except Exception:  # noqa: BLE001
                         pass
-                    if min(im.size) < 46:                   # a tracking pixel or icon, not a product photo
+                    if min(im.size) < 47:                   # a tracking pixel or icon, not a product photo
                         why.append("too small (placeholder?)")
                         continue
                     return self._prepare(im)
@@ -3517,6 +3616,7 @@ class App(tk.Tk):
         for w in self._update_bar.winfo_children():
             w.destroy()
         self._update_msg.configure(text="Downloading the update...  please don't close Deals.", fg=self.P["fg"])
+        self.tray_status("downloading an update...")
 
         def prog(i, n):
             if FROZEN:                                           # bytes so far / total bytes
@@ -3539,6 +3639,7 @@ class App(tk.Tk):
         for w in self._update_bar.winfo_children():
             w.destroy()
         if ok and FROZEN:                                        # msg is the verified installer's path
+            self.tray_status(f"installing update {m['version']}...")
             self._update_msg.configure(text=f"\u2713 Verified. Installing version {m['version']} - Deals will close and reopen "
                                             "by itself in a few seconds.", fg=self.P["accent"])
             try:

@@ -12,7 +12,9 @@ from __future__ import annotations
 import ctypes
 import ctypes.wintypes
 import math
+import os
 import sys
+import threading
 import time
 import tkinter as tk
 from tkinter import font as tkfont
@@ -1256,3 +1258,199 @@ def make_icon(size: int = 256):
         d.line((ax, ay, ax + dx, ay + dy), fill=green, width=int(aw))
         d.ellipse((ax + dx - aw / 2, ay + dy - aw / 2, ax + dx + aw / 2, ay + dy + aw / 2), fill=green)
     return im.resize((size, size), _resample())
+
+
+# --------------------------------------------------------------------------- #
+# Notification-area (system tray) icon - plain ctypes, no extra packages.
+# New icons start in Windows' "hidden icons" overflow, which is where Deals lives until you pin it.
+# --------------------------------------------------------------------------- #
+class Tray:
+    """A tray icon with a right-click menu (Open / status / Check now / Quit / Force quit).
+    `on_event(name)` is called from the tray's own thread with 'open', 'check', 'quit' or 'force'."""
+    WM_TRAY = 0x0400 + 20
+    ID_OPEN, ID_CHECK, ID_QUIT, ID_FORCE = 1, 2, 3, 4
+
+    def __init__(self, on_event, tip="Deals", icon_path=None):
+        self.on_event, self.tip_text, self.icon_path = on_event, tip, icon_path
+        self.status_text, self.ok, self.hwnd, self._hicon = "", False, None, None
+        self._ready = threading.Event()
+        self._thread = None
+
+    # ------------------------------------------------------------------ public --
+    def start(self):
+        if sys.platform != "win32" or self._thread:
+            return False
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+        self._ready.wait(3.0)
+        return self.ok
+
+    def status(self, text):
+        """What Deals is doing (shown in the tooltip and at the top of the menu)."""
+        self.status_text = (text or "").strip()
+        self._modify()
+
+    def notify(self, title, text):
+        if not self.ok:
+            return
+        try:
+            nid = self._nid(0x10)                                   # NIF_INFO
+            nid.szInfoTitle, nid.szInfo, nid.dwInfoFlags = title[:63], text[:255], 1
+            self._sh.Shell_NotifyIconW(1, ctypes.byref(nid))        # NIM_MODIFY
+        except Exception:  # noqa: BLE001
+            pass
+
+    def stop(self):
+        try:
+            if self.hwnd:
+                self._u.PostMessageW(self.hwnd, 0x0010, 0, 0)        # WM_CLOSE
+        except Exception:  # noqa: BLE001
+            pass
+
+    # ---------------------------------------------------------------- internals --
+    def _tip(self):
+        t = "Deals" + (f" - {self.status_text}" if self.status_text else "")
+        return t[:120]
+
+    def _nid(self, flags):
+        w = ctypes.wintypes
+
+        class GUID(ctypes.Structure):
+            _fields_ = [("a", w.DWORD), ("b", w.WORD), ("c", w.WORD), ("d", ctypes.c_ubyte * 8)]
+
+        class NID(ctypes.Structure):
+            _fields_ = [("cbSize", w.DWORD), ("hWnd", w.HWND), ("uID", w.UINT), ("uFlags", w.UINT),
+                        ("uCallbackMessage", w.UINT), ("hIcon", w.HANDLE), ("szTip", ctypes.c_wchar * 128),
+                        ("dwState", w.DWORD), ("dwStateMask", w.DWORD), ("szInfo", ctypes.c_wchar * 256),
+                        ("uVersion", w.UINT), ("szInfoTitle", ctypes.c_wchar * 64), ("dwInfoFlags", w.DWORD),
+                        ("guidItem", GUID), ("hBalloonIcon", w.HANDLE)]
+        nid = NID()
+        nid.cbSize, nid.hWnd, nid.uID, nid.uFlags = ctypes.sizeof(NID), self.hwnd, 1, flags
+        nid.uCallbackMessage, nid.hIcon, nid.szTip = self.WM_TRAY, self._hicon, self._tip()
+        return nid
+
+    def _add(self):
+        try:
+            self._sh.Shell_NotifyIconW(0, ctypes.byref(self._nid(0x7)))     # NIM_ADD: message | icon | tip
+            return True
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _modify(self):
+        if not self.ok:
+            return
+        try:
+            self._sh.Shell_NotifyIconW(1, ctypes.byref(self._nid(0x7)))
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _menu(self):
+        u, w = self._u, ctypes.wintypes
+        menu = u.CreatePopupMenu()
+        try:
+            u.AppendMenuW(menu, 0, self.ID_OPEN, "Open Deals")
+            u.SetMenuDefaultItem(menu, self.ID_OPEN, 0)
+            u.AppendMenuW(menu, 0x800, 0, None)
+            u.AppendMenuW(menu, 0x3, 0, self.status_text or "Idle")             # greyed status line
+            u.AppendMenuW(menu, 0, self.ID_CHECK, "Check watchlist now")
+            u.AppendMenuW(menu, 0x800, 0, None)
+            u.AppendMenuW(menu, 0, self.ID_QUIT, "Quit Deals")
+            u.AppendMenuW(menu, 0, self.ID_FORCE, "Force quit")
+            pt = w.POINT()
+            u.GetCursorPos(ctypes.byref(pt))
+            u.SetForegroundWindow(self.hwnd)                                    # so the menu closes when you click away
+            cmd = u.TrackPopupMenu(menu, 0x0100 | 0x0002 | 0x0020, pt.x, pt.y, 0, self.hwnd, None)
+            u.PostMessageW(self.hwnd, 0, 0, 0)
+        finally:
+            u.DestroyMenu(menu)
+        name = {self.ID_OPEN: "open", self.ID_CHECK: "check", self.ID_QUIT: "quit", self.ID_FORCE: "force"}.get(cmd)
+        if name:
+            self._fire(name)
+
+    def _fire(self, name):
+        try:
+            self.on_event(name)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _run(self):
+        try:
+            w = ctypes.wintypes
+            u = self._u = ctypes.WinDLL("user32", use_last_error=True)
+            self._sh = ctypes.WinDLL("shell32", use_last_error=True)
+            k = ctypes.WinDLL("kernel32", use_last_error=True)
+            LRESULT = ctypes.c_ssize_t
+            WNDPROC = ctypes.WINFUNCTYPE(LRESULT, w.HWND, w.UINT, w.WPARAM, w.LPARAM)
+
+            class WNDCLASS(ctypes.Structure):
+                _fields_ = [("style", w.UINT), ("lpfnWndProc", WNDPROC), ("cbClsExtra", ctypes.c_int),
+                            ("cbWndExtra", ctypes.c_int), ("hInstance", w.HANDLE), ("hIcon", w.HANDLE),
+                            ("hCursor", w.HANDLE), ("hbrBackground", w.HANDLE), ("lpszMenuName", w.LPCWSTR),
+                            ("lpszClassName", w.LPCWSTR)]
+
+            u.DefWindowProcW.argtypes, u.DefWindowProcW.restype = [w.HWND, w.UINT, w.WPARAM, w.LPARAM], LRESULT
+            u.RegisterClassW.argtypes, u.RegisterClassW.restype = [ctypes.POINTER(WNDCLASS)], w.ATOM
+            u.CreateWindowExW.argtypes = [w.DWORD, w.LPCWSTR, w.LPCWSTR, w.DWORD, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+                                          ctypes.c_int, w.HWND, w.HANDLE, w.HANDLE, w.LPVOID]
+            u.CreateWindowExW.restype = w.HWND
+            u.PostMessageW.argtypes = [w.HWND, w.UINT, w.WPARAM, w.LPARAM]
+            u.LoadImageW.argtypes = [w.HANDLE, w.LPCWSTR, w.UINT, ctypes.c_int, ctypes.c_int, w.UINT]
+            u.LoadImageW.restype = w.HANDLE
+            u.CreatePopupMenu.restype = w.HANDLE
+            u.AppendMenuW.argtypes = [w.HANDLE, w.UINT, ctypes.c_size_t, w.LPCWSTR]
+            u.SetMenuDefaultItem.argtypes = [w.HANDLE, w.UINT, w.UINT]
+            u.TrackPopupMenu.argtypes = [w.HANDLE, w.UINT, ctypes.c_int, ctypes.c_int, ctypes.c_int, w.HWND, w.LPVOID]
+            u.DestroyMenu.argtypes = [w.HANDLE]
+            u.SetForegroundWindow.argtypes = [w.HWND]
+            k.GetModuleHandleW.argtypes, k.GetModuleHandleW.restype = [w.LPCWSTR], w.HANDLE
+            self._sh.Shell_NotifyIconW.argtypes = [w.DWORD, ctypes.c_void_p]
+            taskbar_created = u.RegisterWindowMessageW("TaskbarCreated")
+
+            self._hicon = None
+            if self.icon_path and os.path.exists(self.icon_path):
+                self._hicon = u.LoadImageW(None, self.icon_path, 1, 0, 0, 0x10 | 0x40)   # ICON, from file, default size
+            if not self._hicon:
+                lib = ctypes.WinDLL("user32")
+                lib.LoadIconW.restype = w.HANDLE
+                self._hicon = lib.LoadIconW(None, ctypes.c_void_p(32512))             # fall back to the stock app icon
+
+            def proc(hwnd, msg, wp, lp):
+                try:
+                    if msg == self.WM_TRAY:
+                        ev = lp & 0xFFFF
+                        if ev in (0x0202, 0x0203):                  # left click / double click
+                            self._fire("open")
+                        elif ev in (0x0205, 0x007B):                # right click / context menu key
+                            self._menu()
+                        return 0
+                    if msg == taskbar_created:                      # Explorer restarted: put the icon back
+                        self._add()
+                        return 0
+                    if msg == 0x0002:                               # WM_DESTROY
+                        self._sh.Shell_NotifyIconW(2, ctypes.byref(self._nid(0)))
+                        u.PostQuitMessage(0)
+                        return 0
+                except Exception:  # noqa: BLE001
+                    pass
+                return u.DefWindowProcW(hwnd, msg, wp, lp)
+
+            self._proc = WNDPROC(proc)                              # keep a reference or it is garbage collected
+            wc = WNDCLASS()
+            wc.lpfnWndProc, wc.hInstance, wc.lpszClassName = self._proc, k.GetModuleHandleW(None), "DealsTrayWindow"
+            u.RegisterClassW(ctypes.byref(wc))
+            self.hwnd = u.CreateWindowExW(0, "DealsTrayWindow", "Deals", 0, 0, 0, 0, 0, None, None, wc.hInstance, None)
+            self.ok = bool(self.hwnd) and self._add()
+        except Exception:  # noqa: BLE001
+            self.ok = False
+        finally:
+            self._ready.set()
+        if not self.ok:
+            return
+        try:
+            msg = ctypes.wintypes.MSG()
+            while self._u.GetMessageW(ctypes.byref(msg), None, 0, 0) > 0:
+                self._u.TranslateMessage(ctypes.byref(msg))
+                self._u.DispatchMessageW(ctypes.byref(msg))
+        except Exception:  # noqa: BLE001
+            pass
+        self.ok = False
