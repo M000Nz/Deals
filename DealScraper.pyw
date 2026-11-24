@@ -155,7 +155,7 @@ def ensure_deps():
 ensure_deps()
 import engine as E  # noqa: E402
 
-if getattr(E, "ENGINE_VERSION", 0) < 48:
+if getattr(E, "ENGINE_VERSION", 0) < 49:
     _r = tk.Tk()
     _r.withdraw()
     messagebox.showerror("Deals", "engine.py is out of date.\n\nReplace it with the new engine.py from the "
@@ -1774,6 +1774,9 @@ class App(tk.Tk):
                 fn = self.q.get_nowait()
                 try:
                     fn()
+                except tk.TclError as ex:
+                    if "invalid command name" not in str(ex) and "bad window path" not in str(ex):
+                        log_error(traceback.format_exc())            # a widget that is already gone is not worth logging
                 except Exception:  # noqa: BLE001
                     log_error(traceback.format_exc())
                 if time.perf_counter() > end:
@@ -2775,7 +2778,7 @@ class App(tk.Tk):
                         im.draft("RGB", (self.iw * 2, self.ih * 2))
                     except Exception:  # noqa: BLE001
                         pass
-                    if min(im.size) < 48:                   # a tracking pixel or icon, not a product photo
+                    if min(im.size) < 49:                   # a tracking pixel or icon, not a product photo
                         why.append("too small (placeholder?)")
                         continue
                     return self._prepare(im)
@@ -3559,6 +3562,8 @@ class App(tk.Tk):
 
     # ---- the big "update available" page ----
     def show_update(self, m):
+        if getattr(self, "_updating", False):                    # a download is under way: leave its page alone
+            return
         self.hide_update()
         P = self.P
         ov = tk.Frame(self, bg=P["bg"], bd=0, highlightthickness=0)
@@ -3585,16 +3590,23 @@ class App(tk.Tk):
         self._update_bar = bar
         frozen = FROZEN
         if frozen:
-            self._update_msg.configure(text="Deals will download the update, check it, and restart itself. "
+            self._upd(text="Deals will download the update, check it, and restart itself. "
                                             "Your watchlist and settings are kept.")
             self.button(bar, "Update now", lambda: self.run_update(m), pad=(22, 9), style="solid", font=self.f_bold).pack(side="left")
         else:
             self.button(bar, "Update now", lambda: self.run_update(m), pad=(22, 9), style="solid", font=self.f_bold).pack(side="left")
-            self._update_msg.configure(text="Your current files are backed up first, so you can always go back.")
+            self._upd(text="Your current files are backed up first, so you can always go back.")
         self.button(bar, "Later", lambda: self.update_later(m), pad=(20, 9), style="ghost").pack(side="left", padx=(10, 0))
         if m.get("page"):
             self.button(bar, "View on GitHub", lambda: self.open_url(m["page"]), pad=(14, 9), style="ghost",
                         font=self.f_small).pack(side="left", padx=(10, 0))
+
+    def _upd(self, **kw):
+        """Change the update page's message; quietly do nothing if that page has already gone."""
+        try:
+            self._update_msg.configure(**kw)
+        except (tk.TclError, AttributeError):
+            pass
 
     def hide_update(self):
         ov = getattr(self, "_update_ov", None)
@@ -3616,15 +3628,21 @@ class App(tk.Tk):
         self._updating = True
         for w in self._update_bar.winfo_children():
             w.destroy()
-        self._update_msg.configure(text="Downloading the update...  please don't close Deals.", fg=self.P["fg"])
+        self._upd(text="Downloading the update...  please don't close Deals.", fg=self.P["fg"])
         self.tray_status("downloading an update...")
+
+        last = {"p": -1}
 
         def prog(i, n):
             if FROZEN:                                           # bytes so far / total bytes
-                self.q.put(lambda: self._update_msg.configure(
-                    text=f"Downloading the update...  {i * 100 // max(n, 1)}%  ({i / 1048576:.0f} of {n / 1048576:.0f} MB)"))
+                pct = i * 100 // max(n, 1)
+                if pct == last["p"]:                             # one update per percent, not one per chunk
+                    return
+                last["p"] = pct
+                self.q.put(lambda: self._upd(
+                    text=f"Downloading the update...  {pct}%  ({i / 1048576:.0f} of {n / 1048576:.0f} MB)"))
             else:
-                self.q.put(lambda: self._update_msg.configure(text=f"Downloading the update...  file {min(i + 1, n)} of {n}"))
+                self.q.put(lambda: self._upd(text=f"Downloading the update...  file {min(i + 1, n)} of {n}"))
 
         def work():
             try:
@@ -3641,23 +3659,23 @@ class App(tk.Tk):
             w.destroy()
         if ok and FROZEN:                                        # msg is the verified installer's path
             self.tray_status(f"installing update {m['version']}...")
-            self._update_msg.configure(text=f"\u2713 Verified. Installing version {m['version']} - Deals will close and reopen "
+            self._upd(text=f"\u2713 Verified. Installing version {m['version']} - Deals will close and reopen "
                                             "by itself in a few seconds.", fg=self.P["accent"])
             try:
                 E.run_installer(msg)
             except OSError:
                 log_error(traceback.format_exc())
-                self._update_msg.configure(text="Couldn't start the installer - it was saved here, so you can run it yourself:\n"
+                self._upd(text="Couldn't start the installer - it was saved here, so you can run it yourself:\n"
                                            + msg, fg=self.P["alert"])
                 return
             self.after(1200, self.on_close)
             return
         if not ok:
-            self._update_msg.configure(text="The update didn't install: " + msg, fg=self.P["alert"])
+            self._upd(text="The update didn't install: " + msg, fg=self.P["alert"])
             self.button(self._update_bar, "Try again", lambda: self.run_update(m), pad=(20, 9), style="solid").pack(side="left")
             self.button(self._update_bar, "Close", self.hide_update, pad=(20, 9), style="ghost").pack(side="left", padx=(10, 0))
             return
-        self._update_msg.configure(text=f"\u2713 Updated to version {m['version']}. " + msg + "\nRestart Deals to start using it.",
+        self._upd(text=f"\u2713 Updated to version {m['version']}. " + msg + "\nRestart Deals to start using it.",
                                    fg=self.P["accent"])
         self.button(self._update_bar, "Restart now", self.restart_app, pad=(22, 9), style="solid",
                     font=self.f_bold).pack(side="left")
