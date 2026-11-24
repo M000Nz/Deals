@@ -37,7 +37,7 @@ from urllib.parse import parse_qs, quote, quote_plus, unquote, urlencode, urljoi
 import requests
 from bs4 import BeautifulSoup
 
-ENGINE_VERSION = 44
+ENGINE_VERSION = 45
 GITHUB_REPO = "M000Nz/Deals"
 GITHUB_API = "https://api.github.com"
 FROZEN = bool(getattr(sys, "frozen", False))                  # True when running as the packaged Deals.exe
@@ -3086,6 +3086,60 @@ DAILY_QUERIES = ["tv", "laptop", "monitor", "headphones", "soundbar", "fridge", 
                  "air conditioner", "vacuum cleaner", "drill", "bbq", "sofa", "bike", "speaker", "printer",
                  "gaming laptop", "graphics card", "ssd", "wireless earbuds", "projector", "dyson", "pressure washer",
                  "tool kit", "golf", "camping tent", "pram", "perfume", "sneakers", "backpack", "microwave", "oven"]
+DAILY_CATS = {
+    "Tech": ["tv", "laptop", "monitor", "headphones", "soundbar", "tablet", "wireless earbuds", "projector", "ssd", "router",
+             "keyboard", "iphone", "samsung phone", "smartwatch", "printer", "nas", "power bank", "wifi mesh"],
+    "Gaming": ["gaming console", "gaming laptop", "gaming monitor", "gaming headset", "gaming chair", "nintendo switch",
+               "ps5", "xbox", "steam deck", "graphics card", "gaming mouse", "gaming keyboard"],
+    "Home & kitchen": ["fridge", "washing machine", "dishwasher", "dryer", "coffee machine", "air fryer", "robot vacuum",
+                       "vacuum cleaner", "microwave", "oven", "dyson", "mattress", "sofa", "air conditioner", "heater",
+                       "thermomix", "blender", "dehumidifier"],
+    "Tools & DIY": ["drill", "power tool", "tool kit", "impact driver", "angle grinder", "circular saw", "pressure washer",
+                    "tool box", "welder", "air compressor", "laser level", "ladder"],
+    "Garden & BBQ": ["lawn mower", "bbq", "whipper snipper", "chainsaw", "hedge trimmer", "leaf blower", "outdoor furniture",
+                     "pizza oven", "fire pit", "garden hose", "ride on mower"],
+    "Fitness": ["treadmill", "exercise bike", "dumbbells", "weight bench", "rowing machine", "yoga mat", "fitness tracker",
+                "running shoes", "gps watch", "home gym", "massage gun"],
+    "Cycling": ["bike", "e-bike", "mountain bike", "road bike", "bike helmet", "bike trainer", "cycling computer",
+                "electric scooter", "kids bike"],
+    "Golf": ["golf clubs", "golf driver", "golf irons", "golf bag", "golf shoes", "golf rangefinder", "golf buggy",
+             "golf putter", "golf simulator"],
+    "Outdoor & camping": ["camping tent", "sleeping bag", "esky", "camping stove", "swag", "hiking boots", "kayak",
+                          "paddle board", "fishing rod", "fishing reel", "4wd", "camp chair", "portable fridge"],
+    "Fashion": ["sneakers", "jacket", "jeans", "backpack", "sunglasses", "boots", "hoodie", "handbag", "watch", "wallet"],
+    "Beauty & health": ["perfume", "hair dryer", "hair straightener", "electric toothbrush", "skincare", "electric shaver",
+                        "vitamins", "protein powder"],
+    "Baby & kids": ["pram", "car seat", "cot", "high chair", "baby monitor", "trampoline", "kids bike", "bassinet"],
+    "Toys & hobbies": ["lego", "board game", "rc car", "model kit", "puzzle", "telescope", "3d printer", "sewing machine",
+                       "drone", "train set", "craft"],
+    "Pets": ["dog bed", "cat tree", "dog food", "aquarium", "pet fountain", "dog crate", "robot litter box"],
+    "Car & auto": ["dash cam", "tyres", "car battery", "jump starter", "roof rack", "car vacuum", "car stereo", "tow bar"],
+    "Music": ["guitar", "electric guitar", "digital piano", "drum kit", "guitar amp", "dj controller", "ukulele",
+              "microphone", "synthesizer"],
+    "Photography": ["camera", "mirrorless camera", "camera lens", "gopro", "tripod", "action camera", "drone", "gimbal"],
+}
+DAILY_CAT_NAMES = ["All"] + list(DAILY_CATS)
+QUERY_CAT: dict[str, str] = {}
+for _c, _qs in DAILY_CATS.items():
+    for _q in _qs:
+        QUERY_CAT.setdefault(_q, _c)
+for _q in ["tv", "laptop", "monitor", "headphones", "soundbar", "tablet"]:
+    QUERY_CAT[_q] = "Tech"
+
+
+def pick_category(terms: str, title: str) -> str:
+    """Which Daily deals category a saved pick belongs to (by the search that found it, else by words in its title)."""
+    if terms and terms in QUERY_CAT:
+        return QUERY_CAT[terms]
+    t = (title or "").lower()
+    best, hit = "Other", 0
+    for c, qs in DAILY_CATS.items():
+        for q in qs:
+            if len(q) >= 4 and q in t and len(q) > hit:
+                best, hit = c, len(q)
+    return best
+
+
 DAILY_SWEEP = 22            # categories checked per refresh, picked at random so each refresh shows different things
 DAILY_KEEP = 150
 SIBLINGS = {"headphones": ["earbuds", "speaker", "soundbar"], "earbuds": ["headphones"], "tv": ["soundbar", "monitor", "projector"],
@@ -3125,16 +3179,18 @@ def _store_pick(con, kind: str, o: Offer, pct: float, terms: str = ""):
                  terms, time.time(), "was" if o.was_price else "ref"))
 
 
-def pick_offers(con, kind: str, limit: int = 200) -> list[Offer]:
+def pick_offers(con, kind: str, limit: int = 200, category: str = "All") -> list[Offer]:
     """Saved picks as Offers (a 'was' price is stored so the normal card shows the saving)."""
     # "Not interested" hides a pick everywhere; on For you, "Interested" also takes it off the page (it is remembered for taste)
     fb = {r["url"] for r in con.execute("SELECT url FROM feedback" + ("" if kind == "foryou" else " WHERE verdict='no'"))}
-    rows = con.execute("SELECT * FROM picks WHERE kind=? ORDER BY found_at DESC, pct DESC LIMIT ?", (kind, limit)).fetchall()
+    rows = con.execute("SELECT * FROM picks WHERE kind=? ORDER BY found_at DESC, pct DESC LIMIT ?", (kind, limit * 3 if category != "All" else limit)).fetchall()
     out = []
     for r in rows:
         if r["url"] in fb:
             continue
         if r["expires"] and r["expires"] < time.time():
+            continue
+        if kind == "daily" and category != "All" and pick_category(r["terms"], r["title"]) != category:
             continue
         ref = r["basis"] == "ref"
         out.append(Offer(r["store"], r["title"], r["price"], r["url"], None if ref else r["was"], r["image"],
@@ -3150,28 +3206,33 @@ def picks_age(con, kind: str) -> float | None:
     return (time.time() - r["m"]) if r and r["m"] else None
 
 
-def refresh_daily(stores: list[dict], cfg: dict | None = None, progress=None, log=print, cancel=None) -> int:
+def refresh_daily(stores: list[dict], cfg: dict | None = None, progress=None, log=print, cancel=None, category: str = "All") -> int:
     """Big-ticket items that are a long way below their normal price today. Returns how many were found."""
     con = db()
     cfg = dict(cfg or {}, _cancel=cancel)
-    queries = [(q, q) for q in random.sample(DAILY_QUERIES, min(DAILY_SWEEP, len(DAILY_QUERIES)))]
+    cat = category if category in DAILY_CATS else "All"
+    pool = DAILY_CATS[cat] if cat != "All" else DAILY_QUERIES
+    min_price = DAILY_MIN_PRICE if cat == "All" else min(DAILY_MIN_PRICE, 60.0)    # hobby gear is often cheaper
+    queries = [(q, q) for q in random.sample(pool, min(DAILY_SWEEP, len(pool)))]
     res = find_offers_many(queries, stores, cfg, progress=progress, deadline=150.0)
     if _cancelled(cfg):
         return 0
     found: dict[str, tuple[Offer, float]] = {}
+    via: dict[str, str] = {}
     for q, (ranked, _rep) in res.items():
         prev = last_prices(con, [o.url for o in ranked])
         for o in ranked:
             if o.score < ALERT_MIN_SCORE:
                 continue
-            pct = _great(o, DAILY_MIN_PRICE, DAILY_MIN_PCT, prev)
+            pct = _great(o, min_price, DAILY_MIN_PCT, prev)
             if pct is not None and (o.url not in found or _saving(o) > _saving(found[o.url][0])):
                 found[o.url] = (o, pct)
+                via[o.url] = q
     # OzBargain front page: only posts that state both a deal price and a normal price
     try:
         for o in parse_ozb_feed(fetch_cached(f"{OZB_BASE}/deals/feed", ttl=600,
                                              accept="application/rss+xml,application/xml,text/xml,*/*", ua=OZB_UA)):
-            if o.was_price and o.price >= DAILY_MIN_PRICE:
+            if o.was_price and o.price >= min_price and (cat == "All" or pick_category("", o.title) == cat):
                 pct = 100 * (o.was_price - o.price) / o.was_price
                 if DAILY_MIN_PCT <= pct <= 90 and o.url not in found:
                     found[o.url] = (o, pct)
@@ -3179,9 +3240,14 @@ def refresh_daily(stores: list[dict], cfg: dict | None = None, progress=None, lo
         log(f"OzBargain front page: {e}")
     fb = {r["url"] for r in con.execute("SELECT url FROM feedback WHERE verdict='no'")}
     best = sorted((v for u, v in found.items() if u not in fb), key=lambda v: _saving(v[0]), reverse=True)[:DAILY_KEEP]
-    con.execute("DELETE FROM picks WHERE kind='daily'")
+    if cat == "All":
+        con.execute("DELETE FROM picks WHERE kind='daily'")
+    else:                                              # a category search only replaces that category's picks
+        for r in con.execute("SELECT url, terms, title FROM picks WHERE kind='daily'").fetchall():
+            if pick_category(r["terms"], r["title"]) == cat:
+                con.execute("DELETE FROM picks WHERE kind='daily' AND url=?", (r["url"],))
     for o, pct in best:
-        _store_pick(con, "daily", o, pct)
+        _store_pick(con, "daily", o, pct, via.get(o.url, ""))
     con.commit()
     return len(best)
 

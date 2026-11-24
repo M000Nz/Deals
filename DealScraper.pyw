@@ -154,7 +154,7 @@ def ensure_deps():
 ensure_deps()
 import engine as E  # noqa: E402
 
-if getattr(E, "ENGINE_VERSION", 0) < 44:
+if getattr(E, "ENGINE_VERSION", 0) < 45:
     _r = tk.Tk()
     _r.withdraw()
     messagebox.showerror("Deals", "engine.py is out of date.\n\nReplace it with the new engine.py from the "
@@ -1402,6 +1402,9 @@ class App(tk.Tk):
         self.foryou = ScrollFrame(self, self.main)
         self.picking, self.pick_cells, self._pick_cols, self.daily_shuffle = None, [], {}, None
         self.pick_sorts = {"daily": "Biggest savings", "foryou": "Newest"}
+        self.daily_cat = E.get_settings(E.db()).get("daily_cat") or "All"
+        if self.daily_cat not in E.DAILY_CAT_NAMES:
+            self.daily_cat = "All"
         self.cmp = []                                                    # products chosen for side-by-side compare
         self._update_ov, self._updating = None, False
         self.scroll_until = 0.0
@@ -2463,7 +2466,21 @@ class App(tk.Tk):
             self.picking = None
             self.hide_loading()
 
+    def set_daily_cat(self, v):
+        """Pick a Daily deals category. It steers the search itself (not just the list): with few saved deals in that
+        category it goes off and looks for them straight away."""
+        self.daily_cat = v
+        E.set_setting(E.db(), "daily_cat", v)
+        self.daily_shuffle = None
+        have = len(E.pick_offers(E.db(), "daily", category=v))
+        if v != "All" and have < 6 and not self.picking and not self.searching:
+            self.refresh_picks("daily")
+        else:
+            self.render_picks("daily")
+
     def pick_title(self, kind):
+        if kind == "daily" and getattr(self, "daily_cat", "All") != "All":
+            return f"Finding the best {self.daily_cat} deals..."
         return ("Finding today's biggest discounts..." if kind == "daily" else "Looking for deals you might like...")
 
     def refresh_picks(self, kind):
@@ -2477,6 +2494,7 @@ class App(tk.Tk):
         if not stores:
             return messagebox.showinfo("Deals", "No sources are switched on. Open Sources > manage sources.")
         self.picking = kind
+        cat = self.daily_cat
         self.pick_cancel = cancel = threading.Event()
         sf = self.daily if kind == "daily" else self.foryou
         sf.outer.pack_forget()
@@ -2491,7 +2509,7 @@ class App(tk.Tk):
             msg = ""
             try:
                 if kind == "daily":
-                    E.refresh_daily(stores, cfg, progress=prog, cancel=cancel)
+                    E.refresh_daily(stores, cfg, progress=prog, cancel=cancel, category=cat)
                 else:
                     _, msg = E.refresh_foryou(stores, cfg, progress=prog, cancel=cancel)
             except Exception:  # noqa: BLE001
@@ -2524,7 +2542,7 @@ class App(tk.Tk):
         self.prune()
         self.thumb_targets, self.cards_by_url, self._typical = {}, {}, None
         inner, sym, con = sf.inner, self.sym(), E.db()
-        offers = E.pick_offers(con, kind)
+        offers = E.pick_offers(con, kind, category=self.daily_cat if kind == "daily" else "All")
         self.sort_picks(offers, kind, con)
         self.pick_pool = list(offers[:80 if kind == "daily" else 60])
         self.rev_hidden = 0
@@ -2541,6 +2559,7 @@ class App(tk.Tk):
         self.button(hdr, "Refresh" if kind == "daily" else "Find more", lambda: self.refresh_picks(kind),
                     pad=(14, 5)).pack(side="right")
         if kind == "daily":
+            self.dropdown(hdr, "category: ", E.DAILY_CAT_NAMES, lambda: self.daily_cat, self.set_daily_cat).pack(side="left", padx=(18, 0))
             self.button(hdr, "Shuffle", self.shuffle_daily, pad=(14, 5), style="solid").pack(side="right", padx=(0, 8))
         else:
             self.button(hdr, "Reset recommended", self.reset_foryou, pad=(14, 5)).pack(side="right", padx=(0, 8))
@@ -2552,6 +2571,9 @@ class App(tk.Tk):
         if kind == "daily":
             sub = (f"Big-ticket items (over {sym}{E.DAILY_MIN_PRICE:.0f}) that are at least {E.DAILY_MIN_PCT:.0f}% off, "
                    f"sorted as you choose. Updated {self.ago(age)}.")
+            if self.daily_cat != "All":
+                sub = (f"{self.daily_cat} deals at least {E.DAILY_MIN_PCT:.0f}% off. Refresh searches this category only. "
+                       f"Updated {self.ago(age)}.")
         else:
             sub = ("Discounted items similar to what you follow. Tap Interested or Not interested and the "
                    f"suggestions get better each time you Find more. Updated {self.ago(age)}.")
@@ -2643,7 +2665,7 @@ class App(tk.Tk):
                         im.draft("RGB", (self.iw * 2, self.ih * 2))
                     except Exception:  # noqa: BLE001
                         pass
-                    if min(im.size) < 44:                   # a tracking pixel or icon, not a product photo
+                    if min(im.size) < 45:                   # a tracking pixel or icon, not a product photo
                         why.append("too small (placeholder?)")
                         continue
                     return self._prepare(im)
