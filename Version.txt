@@ -1,3 +1,4 @@
-43
+44
 https://github.com/M000Nz/Deals
-note: Collapsed watchlist items now show a small graph of the change since the last price check - green down, red up
+note: For you now mixes in a couple of outliers - related kinds of product you might like - so it stays fresh
+note: Press Find more 5 times with no Interested / Not interested and For you switches to other categories

@@ -37,7 +37,7 @@ from urllib.parse import parse_qs, quote, quote_plus, unquote, urlencode, urljoi
 import requests
 from bs4 import BeautifulSoup
 
-ENGINE_VERSION = 43
+ENGINE_VERSION = 44
 GITHUB_REPO = "M000Nz/Deals"
 GITHUB_API = "https://api.github.com"
 FROZEN = bool(getattr(sys, "frozen", False))                  # True when running as the packaged Deals.exe
@@ -3296,6 +3296,51 @@ def interest_queries(con) -> list[str]:
     return out
 
 
+FORYOU_IDLE_SHIFT = 5      # "Find more" this many times with no reaction -> move on to other categories
+
+
+def _explore_topics(con, qs: list[str], n: int) -> list[str]:
+    """Kinds of product you haven't been shown: neighbours of what you like first, then anything popular."""
+    import random
+    taste = _taste(con)
+    seen = {w for q in qs for w in q.split()}
+    bad = {w for w, c in taste["no_types"].items() if c >= 2 and not taste["like_types"].get(w)}
+    near = [x for q in qs[:8] for w in q.split() for x in SIBLINGS.get(w, [])]
+    pool = list(RANDOM_TOPICS)
+    random.shuffle(pool)
+    out: list[str] = []
+    for t in near + pool:
+        words = set(t.split())
+        if t in qs or t in out or words & bad or (t in pool and words & seen and t not in near):
+            continue
+        out.append(t)
+        if len(out) >= n:
+            break
+    return out
+
+
+def _foryou_take(con, qs: list[str], off: int, st: dict) -> list[str]:
+    """Which searches this 'Find more' runs: mostly your taste, plus a couple of outliers; after several presses with no
+    Interested / Not interested (and nothing new on the watchlist) it swaps to other categories altogether."""
+    if foryou_random(con):
+        return [qs[(off + i) % len(qs)] for i in range(min(6, len(qs)))]
+    sig = "%s:%s:%s" % (con.execute("SELECT COUNT(*) FROM feedback").fetchone()[0],
+                        con.execute("SELECT COALESCE(MAX(id),0) FROM watchlist").fetchone()[0],
+                        con.execute("SELECT COUNT(*) FROM watchlist").fetchone()[0])
+    idle = int(st.get("foryou_idle") or 0) + 1 if st.get("foryou_sig") == sig else 0
+    set_setting(con, "foryou_sig", sig)
+    if idle >= FORYOU_IDLE_SHIFT:
+        set_setting(con, "foryou_idle", "0")
+        fresh = _explore_topics(con, qs, 6)
+        if fresh:
+            return fresh
+    else:
+        set_setting(con, "foryou_idle", str(idle))
+    n_out = 2 if len(qs) >= 4 else 1
+    main = [qs[(off + i) % len(qs)] for i in range(min(6 - n_out, len(qs)))]
+    return main + _explore_topics(con, qs + main, n_out)
+
+
 def refresh_foryou(stores: list[dict], cfg: dict | None = None, progress=None, log=print, cancel=None) -> tuple[int, str]:
     """Look for deals similar to what you follow. Adds a few new suggestions each time."""
     con = db()
@@ -3303,8 +3348,9 @@ def refresh_foryou(stores: list[dict], cfg: dict | None = None, progress=None, l
     qs = interest_queries(con)
     if not qs:
         return 0, "Add something to your Watchlist (or mark a few Daily deals as Interested) and I'll start suggesting things."
-    off = int(get_settings(con).get("foryou_rot") or 0)
-    take = [qs[(off + i) % len(qs)] for i in range(min(6, len(qs)))]
+    st = get_settings(con)
+    off = int(st.get("foryou_rot") or 0)
+    take = _foryou_take(con, qs, off, st)
     set_setting(con, "foryou_rot", str(off + len(take)))
     cfg = dict(cfg or {}, _cancel=cancel)
     res = find_offers_many([(q, q) for q in take], stores, cfg, progress=progress, deadline=90.0)
