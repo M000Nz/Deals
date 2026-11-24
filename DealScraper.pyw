@@ -1476,9 +1476,15 @@ class App(tk.Tk):
     def restore_data(self):
         src = filedialog.askopenfilename(title="Choose a Deals backup (.db)")
         if src and messagebox.askyesno("Restore", "This replaces your watchlist, history and settings with the backup. "
-                                                  "Deals will close; open it again afterwards. Continue?"):
+                                                  "Deals will restart by itself. Continue?"):
+            self.set_status("restoring...")
             if E.restore_db(src):
-                self.destroy()
+                try:
+                    E.db()                                   # upgrade an old backup now, so a problem shows here
+                except Exception:  # noqa: BLE001
+                    log_error(traceback.format_exc())
+                    return messagebox.showerror("Deals", "The backup was restored but couldn't be opened - see Help > open error log.")
+                self.restart_app()
             else:
                 messagebox.showerror("Deals", "That file isn't a Deals backup.")
 

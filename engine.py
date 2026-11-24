@@ -3313,7 +3313,20 @@ def restore_db(src: str) -> bool:
         return False
     if not {"watchlist", "stores", "settings"} <= names:
         return False
-    shutil.copyfile(src, str(DB_PATH))
+    try:                                           # keep the current database in case the restore was a mistake
+        shutil.copyfile(str(DB_PATH), str(DB_PATH) + ".before-restore")
+    except OSError:
+        pass
+    try:                                           # SQLite's own copy: safe even while Deals has the database open
+        s_con, d_con = sqlite3.connect(src), sqlite3.connect(str(DB_PATH), timeout=30)
+        with d_con:
+            s_con.backup(d_con)
+        s_con.close()
+        d_con.close()
+    except sqlite3.Error:
+        return False
+    global _SEEDED
+    _SEEDED = False                                # re-check/upgrade the restored (maybe old) database on next open
     return True
 
 
