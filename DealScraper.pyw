@@ -124,7 +124,7 @@ def ensure_deps():
 ensure_deps()
 import engine as E  # noqa: E402
 
-if getattr(E, "ENGINE_VERSION", 0) < 27:
+if getattr(E, "ENGINE_VERSION", 0) < 28:
     _r = tk.Tk()
     _r.withdraw()
     messagebox.showerror("Deals", "engine.py is out of date.\n\nReplace it with the new engine.py from the "
@@ -2270,6 +2270,8 @@ class App(tk.Tk):
                     pad=(14, 5)).pack(side="right")
         if kind == "daily":
             self.button(hdr, "Shuffle", self.shuffle_daily, pad=(14, 5), style="solid").pack(side="right", padx=(0, 8))
+        else:
+            self.button(hdr, "Reset recommended", self.reset_foryou, pad=(14, 5)).pack(side="right", padx=(0, 8))
         self.dropdown(hdr, "reviews: ", E.REVIEW_MODES, lambda: self.rev_mode, self.set_reviews).pack(side="right", padx=(0, 10))
         self.dropdown(hdr, "sort: ", PICK_SORTS,
                       lambda k=kind: "Shuffled" if (k == "daily" and self.daily_shuffle) else self.pick_sorts.get(k, "Newest"),
@@ -2281,6 +2283,9 @@ class App(tk.Tk):
         else:
             sub = ("Discounted items similar to what you follow. Tap Interested or Not interested and the "
                    f"suggestions get better each time you Find more. Updated {self.ago(age)}.")
+            if E.foryou_random(con):
+                sub = ("Showing random popular deals - recommendations were reset. Press Interested on something, or add an "
+                       f"item to your Watchlist, and they'll start matching you again. Updated {self.ago(age)}.")
         self.label(inner, sub, "muted", font=self.f_small, wraplength=760, justify="left").pack(anchor="w", padx=26, pady=(0, 6))
         if not offers:
             note = getattr(self, "pick_msg", "") or ("Nothing found today. Try Refresh later." if kind == "daily"
@@ -2296,6 +2301,16 @@ class App(tk.Tk):
                 anchor="w", padx=26, pady=(0, 8))
         if self.rev_mode != "Off" and not self.rev_busy and any(o.url not in self.rev_info for o in self.pick_pool):
             self.after(50, self.start_review_check)
+
+    def reset_foryou(self):
+        if not messagebox.askyesno("Reset recommended", "This clears everything For you has learned (your Interested / Not "
+                                   "interested choices and the current suggestions). You'll get random popular suggestions "
+                                   "until you press Interested on something or add a new item to your Watchlist. Continue?"):
+            return
+        E.reset_foryou(E.db())
+        self.pick_msg = ""
+        self.set_status("recommendations reset")
+        self.refresh_picks("foryou")
 
     def feedback_row(self, holder, o, verdict):
         row = self.frame(holder)

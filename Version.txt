@@ -1,3 +1,4 @@
-27
+28
 https://github.com/M000Nz/Deals
-note: JB Hi-Fi prices are now double-checked against the product page, fixing wrong prices on some watches
+note: For you has a Reset recommended button - it clears what it learned and shows random popular deals until you press Interested or add to your Watchlist
+note: JB Hi-Fi price check now falls back to the browser and keeps a small price_check.log

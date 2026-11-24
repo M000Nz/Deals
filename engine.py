@@ -37,7 +37,7 @@ from urllib.parse import parse_qs, quote, quote_plus, urlencode, urljoin, urlpar
 import requests
 from bs4 import BeautifulSoup
 
-ENGINE_VERSION = 27
+ENGINE_VERSION = 28
 GITHUB_REPO = "M000Nz/Deals"
 GITHUB_API = "https://api.github.com"
 FROZEN = bool(getattr(sys, "frozen", False))                  # True when running as the packaged Deals.exe
@@ -1888,22 +1888,36 @@ def page_price(html: str) -> float | None:
     return None
 
 
-def verify_store_prices(offers: list, limit: int = 24, budget: float = 9.0) -> int:
+def verify_store_prices(offers: list, limit: int = 24, budget: float = 9.0, cfg: dict | None = None) -> int:
     """Correct prices from the product pages of VERIFY_STORES. Returns how many prices were changed."""
     todo = [o for o in offers if o.source == "store" and any(w in o.store.lower() for w in VERIFY_STORES)][:limit]
     if not todo:
         return 0
     fixed, now = 0, time.time()
+    use_b = browser_wanted(cfg)
+    if use_b:
+        budget = max(budget, 30.0)
+    notes: list[str] = []
 
     def one(o):
         hit = _PAGE_PRICE_CACHE.get(o.url)
         if hit and now - hit[0] < 1800:
             return o, hit[1]
+        v, why = None, ""
         try:
             v = page_price(fetch(o.url, timeout=(4, 6)))
-        except Exception:  # noqa: BLE001
-            return o, None
-        if v:
+            why = "no price tag on page" if v is None else ""
+        except Exception as e:  # noqa: BLE001
+            why = f"plain fetch failed ({type(e).__name__}: {str(e)[:50]})"
+        if v is None and use_b:                          # the shop blocks scripts or builds the page late: use a real browser
+            try:
+                v = page_price(BROWSER.render(o.url, 15))
+                why += "; browser: " + ("ok" if v else "no price tag on page")
+            except Exception as e:  # noqa: BLE001
+                why += f"; browser failed ({str(e)[:50]})"
+        if v is None:
+            notes.append(f"{o.title[:50]} @ {o.price}: {why}")
+        else:
             _PAGE_PRICE_CACHE[o.url] = (now, v)
         return o, v
 
@@ -1922,6 +1936,12 @@ def verify_store_prices(offers: list, limit: int = 24, budget: float = 9.0) -> i
                 fixed += 1
     finally:
         ex.shutdown(wait=False, cancel_futures=True)
+    try:                                                 # a small note you can send me if a price is still wrong
+        (DATA_DIR / "price_check.log").write_text(
+            time.strftime("%Y-%m-%d %H:%M:%S") + f"  checked {len(todo)} page(s), corrected {fixed}\n" + "\n".join(notes[:30]),
+            encoding="utf-8")
+    except OSError:
+        pass
     return fixed
 
 
@@ -1970,7 +1990,7 @@ def find_offers_many(queries: list[tuple], stores: list[dict], cfg: dict | None 
             o.used = o.used or bool(USED_RE.search(o.title))
         visible = [o for o in raw if not is_hidden_offer(o, words) and o.url not in hid]
         try:
-            verify_store_prices(visible)
+            verify_store_prices(visible, cfg=cfg)
         except Exception:  # noqa: BLE001
             pass
         ranked, junk = drop_junk_prices(rank_offers(kw, visible))
@@ -2862,8 +2882,43 @@ def _taste(con) -> dict:
     return t
 
 
+RANDOM_TOPICS = ["headphones", "air fryer", "monitor", "robot vacuum", "smartwatch", "laptop", "coffee machine", "tv",
+                 "soundbar", "router", "keyboard", "mouse", "office chair", "standing desk", "power tools", "drill",
+                 "camera", "drone", "tablet", "phone", "speaker", "gaming console", "ssd", "backpack", "sneakers",
+                 "kettle", "blender", "dyson", "fridge", "washing machine", "mattress", "lego", "fitness tracker",
+                 "e-bike", "bbq", "projector", "printer", "graphics card", "microwave", "electric toothbrush",
+                 "vacuum cleaner", "tent", "board game", "toaster", "heater", "fan", "pressure cooker", "webcam"]
+
+
+def reset_foryou(con):
+    """Forget everything For you has learned (likes, dislikes, suggestions). Until you press Interested on something or add a
+    new watchlist item, it suggests random popular things."""
+    con.execute("DELETE FROM feedback")
+    con.execute("DELETE FROM picks WHERE kind='foryou'")
+    wid = con.execute("SELECT COALESCE(MAX(id),0) FROM watchlist").fetchone()[0]
+    set_setting(con, "foryou_rot", "0")
+    set_setting(con, "foryou_reset_wid", str(wid))
+    set_setting(con, "foryou_reset_at", str(time.time()))
+    con.commit()
+
+
+def foryou_random(con) -> bool:
+    """True after a reset, until you mark something Interested or add a new item to the watchlist."""
+    st = get_settings(con)
+    at = float(st.get("foryou_reset_at") or 0)
+    if not at:
+        return False
+    if con.execute("SELECT 1 FROM feedback WHERE verdict='yes' AND at >= ? LIMIT 1", (at,)).fetchone():
+        return False
+    wid = int(float(st.get("foryou_reset_wid") or 0))
+    return not con.execute("SELECT 1 FROM watchlist WHERE id > ? LIMIT 1", (wid,)).fetchone()
+
+
 def interest_queries(con) -> list[str]:
     """Searches that look for things like what you've saved or liked (not the exact items, to find new ones)."""
+    if foryou_random(con):
+        import random
+        return random.sample(RANDOM_TOPICS, 8)
     taste = _taste(con)
     qs: list[str] = []
     for r in con.execute("SELECT keywords FROM watchlist ORDER BY id"):
