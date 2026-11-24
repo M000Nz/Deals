@@ -124,7 +124,7 @@ def ensure_deps():
 ensure_deps()
 import engine as E  # noqa: E402
 
-if getattr(E, "ENGINE_VERSION", 0) < 29:
+if getattr(E, "ENGINE_VERSION", 0) < 30:
     _r = tk.Tk()
     _r.withdraw()
     messagebox.showerror("Deals", "engine.py is out of date.\n\nReplace it with the new engine.py from the "
@@ -1131,7 +1131,7 @@ class App(tk.Tk):
         self.theme_sw.pack(side="right")
         menus = [
             ("Sources", [("manage sources...", lambda: StoresDialog(self)), ("test all sources", lambda: self.test_stores()),
-                         ("add custom store...", lambda: self.add_store()), None,
+                         ("add custom store...", lambda: self.add_store()), ("repair broken sources", self.run_repair), None,
                          ("reset built-in list", self.reset_stores)]),
             ("Settings", [("alerts...", self.open_alerts), ("browser mode...", lambda: StoresDialog(self)),
                           ("hidden sites...", self.open_hidden), ("cashback %...", self.open_cashback),
@@ -3274,6 +3274,49 @@ class App(tk.Tk):
         if snaps:
             msg += f"\n\nSaved the page from {snaps} source(s) to the 'snapshots' folder so a changed layout can be fixed."
         messagebox.showinfo("check sources", msg)
+
+    def run_repair(self):
+        if self.searching or self.picking or getattr(self, "_health", False) or getattr(self, "_repairing", False):
+            return self.set_status("busy - try again in a moment")
+        con = E.db()
+        n = con.execute("SELECT COUNT(*) FROM stores WHERE status LIKE 'Search URL%' OR status LIKE 'No products%' "
+                        "OR status LIKE 'Error%'").fetchone()[0]
+        if not n:
+            return messagebox.showinfo("repair sources", "No broken sources to repair. Run Sources > test all sources first "
+                                       "if you haven't lately.")
+        if not messagebox.askyesno("repair broken sources", f"{n} source(s) aren't finding products. Deals will look for each "
+                                   "shop's real search address and switch it back on if it finds one. This can take a few minutes. Continue?"):
+            return
+        self._repairing = True
+        cfg = E.get_settings(con)
+        self.set_status("repairing sources...")
+
+        def work():
+            try:
+                res = E.repair_sources(E.db(), cfg, progress=lambda d, t: self.q.put(
+                    lambda d=d, t=t: self.set_status(f"repairing sources... {d} of {t}")))
+            except Exception:  # noqa: BLE001
+                log_error(traceback.format_exc())
+                res = []
+            self.q.put(lambda: self.repair_done(res))
+        threading.Thread(target=work, daemon=True).start()
+
+    def repair_done(self, res):
+        self._repairing = False
+        self.set_status("ready")
+        fixed = [r["name"] for r in res if r["ok"]]
+        left = [r["name"] for r in res if not r["ok"]]
+        msg = f"Repaired {len(fixed)} of {len(res)} source(s)."
+        if fixed:
+            msg += "\n\nBack on: " + ", ".join(fixed)
+        if left:
+            msg += "\n\nCouldn't fix: " + ", ".join(left[:25]) + ("..." if len(left) > 25 else "") + \
+                   "\n(These shops block automated searches or build pages Deals can't read yet. StaticICE covers many of them.)"
+        messagebox.showinfo("repair sources", msg)
+        try:
+            self.test_stores()
+        except Exception:  # noqa: BLE001
+            pass
 
     def run_selftest(self):
         try:

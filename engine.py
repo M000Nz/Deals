@@ -37,7 +37,7 @@ from urllib.parse import parse_qs, quote, quote_plus, unquote, urlencode, urljoi
 import requests
 from bs4 import BeautifulSoup
 
-ENGINE_VERSION = 29
+ENGINE_VERSION = 30
 GITHUB_REPO = "M000Nz/Deals"
 GITHUB_API = "https://api.github.com"
 FROZEN = bool(getattr(sys, "frozen", False))                  # True when running as the packaged Deals.exe
@@ -384,7 +384,7 @@ def _finish_db(con):
     cols = [r[1] for r in con.execute("PRAGMA table_info(stores)")]
     for col, ddl in (("item", "TEXT"), ("title", "TEXT"), ("price", "TEXT"), ("was_price", "TEXT"), ("link", "TEXT"),
                      ("enabled", "INTEGER DEFAULT 1"), ("status", "TEXT DEFAULT 'Not tested'"), ("tested_at", "REAL"),
-                     ("custom", "INTEGER DEFAULT 0"),            # very old databases are missing these
+                     ("custom", "INTEGER DEFAULT 0"), ("alt_url", "TEXT DEFAULT ''"),   # alt_url = a repaired search address
                      ("use_browser", "INTEGER DEFAULT 0"), ("fail_streak", "INTEGER DEFAULT 0"),
                      ("skip_until", "REAL DEFAULT 0"), ("cats", "TEXT DEFAULT 'all'")):
         if col not in cols:
@@ -415,6 +415,8 @@ def seed_catalog(con):
     for region, stores in CATALOG.items():
         for name, url in stores:
             con.execute("INSERT OR IGNORE INTO stores(name,region,search_url,custom) VALUES(?,?,?,0)",
+                        (name, region, url))
+            con.execute("UPDATE stores SET alt_url='' WHERE name=? AND region=? AND custom=0 AND search_url<>?",
                         (name, region, url))
             con.execute("UPDATE stores SET search_url=?, cats=? WHERE name=? AND region=? AND custom=0",
                         (url, STORE_CATS.get(name, "all"), name, region))
@@ -714,23 +716,45 @@ class BrowserEngine:
             self.error = ("no browser found - install one from Settings" if "xecutable" in str(e)
                           else (msg[0][:160] if msg else "browser failed to start"))
 
-    async def _render(self, url: str, timeout: int) -> str:
+    _STEALTH = """
+        Object.defineProperty(navigator,'webdriver',{get:()=>undefined});
+        Object.defineProperty(navigator,'languages',{get:()=>['en-AU','en-GB','en']});
+        Object.defineProperty(navigator,'plugins',{get:()=>[1,2,3,4,5]});
+        window.chrome = window.chrome || {runtime: {}, app: {isInstalled: false}};
+        const _q = navigator.permissions && navigator.permissions.query;
+        if (_q) navigator.permissions.query = (p) => p && p.name === 'notifications'
+            ? Promise.resolve({state: Notification.permission}) : _q.call(navigator.permissions, p);
+    """
+
+    async def _render(self, url: str, timeout: int, warm: bool = False) -> str:
         async with self.sem:
             ctx = await self.browser.new_context(user_agent=self.ua, locale="en-AU", timezone_id="Australia/Sydney",
                                                  viewport={"width": 1024, "height": 768})
             try:
-                await ctx.add_init_script("Object.defineProperty(navigator,'webdriver',{get:()=>undefined})")
+                await ctx.add_init_script(self._STEALTH)
                 page = await ctx.new_page()
 
                 async def gate(route):                       # skip pictures, fonts and trackers: faster, same prices
                     req = route.request
-                    if req.resource_type in ("image", "media", "font", "stylesheet") or any(t in req.url for t in TRACKERS):
+                    skip = ("image", "media") if warm else ("image", "media", "font", "stylesheet")
+                    if req.resource_type in skip or any(t in req.url for t in TRACKERS):
                         await route.abort()
                     else:
                         await route.continue_()
 
                 await page.route("**/*", gate)
+                if warm:                                     # bot checks often let you through once you've visited the front page
+                    pu = urlparse(url)
+                    try:
+                        await page.goto(f"{pu.scheme}://{pu.netloc}/", wait_until="domcontentloaded", timeout=timeout * 1000)
+                        await page.mouse.move(220, 260)
+                        await page.wait_for_timeout(1800)
+                        await page.mouse.move(500, 400)
+                    except Exception:  # noqa: BLE001
+                        pass
                 await page.goto(url, wait_until="domcontentloaded", timeout=timeout * 1000)
+                if warm:
+                    await page.wait_for_timeout(1500)
                 try:
                     await page.wait_for_function(r"document.body && /\$\s?\d/.test(document.body.innerText)",
                                                  timeout=6000)
@@ -746,12 +770,12 @@ class BrowserEngine:
             finally:
                 await ctx.close()
 
-    def render(self, url: str, timeout: int = 20) -> str:
+    def render(self, url: str, timeout: int = 20, warm: bool = False) -> str:
         if not self.start():
             raise FetchError("nobrowser", self.error or "browser unavailable")
-        fut = asyncio.run_coroutine_threadsafe(self._render(url, timeout), self.loop)
+        fut = asyncio.run_coroutine_threadsafe(self._render(url, timeout, warm), self.loop)
         try:
-            return fut.result(timeout + 20)
+            return fut.result(timeout + 20 + (10 if warm else 0))
         except Exception as e:  # noqa: BLE001
             msg = str(e).strip().splitlines()
             raise FetchError("error", (msg[0] if msg else "page failed to load")[:80])
@@ -1428,12 +1452,12 @@ def _parse_store_page(page: str, url: str, store: dict) -> list[Offer]:
 def scrape_store(store: dict, query: str, cfg: dict | None = None, full: str | None = None) -> list[Offer]:
     """All products found for `query` (before relevance ranking). Raises FetchError(kind) with the reason.
     Stores that block plain requests or build their pages with JavaScript are loaded in a real browser."""
-    tpl, cfg = store["search_url"], cfg or {}
+    tpl, cfg = store.get("alt_url") or store["search_url"], cfg or {}
     if tpl.startswith("ozb:"):
         return scrape_ozb(store, query, full)
     if "staticice." in tpl:
         inc, exc = parse_keywords(full or query)
-        url = tpl.replace("{query}", quote_plus(" ".join(inc + ["-" + x for x in exc] + ["links:30"])))
+        url = tpl.replace("{query}", quote_plus(" ".join(inc + ["-" + x for x in exc]))) + "&links=40"
         page = fetch(url)
         offers = _staticice_offers(page, url)
         if not offers and _classify_empty(page):
@@ -1459,6 +1483,12 @@ def scrape_store(store: dict, query: str, cfg: dict | None = None, full: str | N
                 raise FetchError("needsjs" if kind == "needsjs" else kind, kind)
             page, rendered = BROWSER.render(url), True
             offers = _parse_store_page(page, url, store)
+    if not offers and rendered and use_b and _classify_empty(page) == "botcheck":
+        try:                                                      # one more go, behaving like a visitor who browsed in
+            page = BROWSER.render(url, 25, warm=True)
+            offers = _parse_store_page(page, url, store)
+        except FetchError:
+            pass
     if not offers:
         kind = _classify_empty(page)
         if kind:
@@ -2715,6 +2745,115 @@ def deal_score(o: Offer, prev: float | None = None, st: dict | None = None, info
 # Store health: do the parsers still find products on each store?
 # --------------------------------------------------------------------------- #
 SNAP_DIR = Path(DB_PATH).parent / "snapshots"
+
+
+_SEARCH_PARAMS = ("q", "query", "search", "s", "keywords", "keyword", "term", "text", "k", "searchterm", "search_query",
+                  "search_term", "searchtext", "kw", "search_text", "string")
+_GENERIC_SEARCH = ["/search?q={query}", "/search/?q={query}", "/catalogsearch/result/?q={query}", "/search?query={query}",
+                   "/search?type=product&q={query}", "/?s={query}&post_type=product", "/search?search={query}",
+                   "/?rf=kw&kw={query}", "/search.php?search_query={query}", "/index.php?route=product/search&search={query}",
+                   "/catalogsearch/result?q={query}", "/search?keywords={query}", "/search?term={query}", "/search?text={query}",
+                   "/search?searchTerm={query}", "/search-results?q={query}", "/products?q={query}", "/shop/search?q={query}",
+                   "/pages/search?q={query}", "/search/{query}"]
+_PROBE = {"tech": "monitor", "gaming": "controller", "home": "pillow", "beauty": "moisturiser", "pets": "dog food",
+          "toys": "lego", "sports": "shoes", "fashion": "shoes", "music": "guitar", "books": "cookbook", "baby": "pram",
+          "all": "gift"}
+
+
+def _home_candidates(base: str, cfg: dict) -> list[str]:
+    """Search addresses the shop's own home page advertises: its search form, or its OpenSearch description."""
+    try:
+        page = fetch(base + "/", timeout=(5, 9))
+    except FetchError as e:
+        if e.kind not in ("blocked", "botcheck") or not browser_wanted(cfg):
+            return []
+        try:
+            page = BROWSER.render(base + "/", 20)
+        except FetchError:
+            return []
+    out: list[str] = []
+    soup = make_soup(page)
+    for f in soup.find_all("form"):
+        if (f.get("method") or "get").lower() != "get":
+            continue
+        for inp in f.find_all("input"):
+            name = (inp.get("name") or "").strip()
+            if name.lower() in _SEARCH_PARAMS or (inp.get("type") or "").lower() == "search":
+                if not name:
+                    continue
+                fixed = {i.get("name"): i.get("value") or "" for i in f.find_all("input", type="hidden") if i.get("name")}
+                fixed[name] = "{query}"
+                q = "&".join(f"{quote(k)}={v if v == '{query}' else quote(v)}" for k, v in fixed.items())
+                out.append(urljoin(base + "/", f.get("action") or "/") .split("?")[0] + "?" + q)
+                break
+    for link in soup.find_all("link", rel=lambda r: r and "search" in r):
+        href = link.get("href")
+        if href and "opensearch" in (link.get("type") or ""):
+            try:
+                xml = fetch(urljoin(base + "/", href), timeout=(4, 7))
+                for m in re.finditer(r'(?i)<Url[^>]+type="text/html"[^>]*template="([^"]+)"|<Url[^>]+template="([^"]+)"[^>]*type="text/html"', xml):
+                    tpl = _html.unescape(m.group(1) or m.group(2)).replace("{searchTerms}", "{query}")
+                    tpl = re.sub(r"\{[^}]*\?\}|&?[\w.-]+=\{(?!query)[^}]*\}", "", tpl)
+                    out.append(tpl)
+            except FetchError:
+                pass
+    return out
+
+
+def discover_search_url(store: dict, cfg: dict | None = None, budget: float = 60.0) -> str | None:
+    """Find a search address that works for `store` (home-page search form first, then common patterns).
+    Returns a template containing {query}, or None."""
+    cfg = cfg or {}
+    pu = urlparse(str(store["search_url"]).replace("{query}", "x"))
+    base = f"{pu.scheme}://{pu.netloc}"
+    cats = (STORE_CATS.get(store["name"], "all") or "all").split()
+    probe = _PROBE.get(cats[0], "gift")
+    cands, t0 = [], time.time()
+    for c in _home_candidates(base, cfg) + [base + g for g in _GENERIC_SEARCH]:
+        if c not in cands and c != store["search_url"] and c != store.get("alt_url"):
+            cands.append(c)
+    for c in cands[:16]:
+        if time.time() - t0 > budget:
+            break
+        trial = {"name": store["name"], "search_url": c, "alt_url": "", "item": None}
+        try:
+            offers = scrape_store(trial, probe, cfg, probe)
+        except FetchError:
+            continue
+        except Exception:  # noqa: BLE001
+            continue
+        if len(offers) >= 2:
+            return c
+    return None
+
+
+def repair_sources(con, cfg: dict | None = None, progress=None, only_names: list[str] | None = None) -> list[dict]:
+    """Find working search addresses for sources that say 'Search URL not found' (switched on or off).
+    Saves what it finds and switches the source back on. Returns [{name, ok, url}]."""
+    cfg = cfg or {}
+    rows = [dict(r) for r in con.execute(
+        "SELECT * FROM stores WHERE status LIKE 'Search URL%' OR status LIKE 'No products%' OR status LIKE 'Error%'")]
+    rows = [r for r in rows if not str(r["search_url"]).startswith("ozb:") and "staticice." not in r["search_url"]]
+    if only_names:
+        rows = [r for r in rows if r["name"] in only_names]
+    out: list[dict] = []
+    if not rows:
+        return out
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        futs = {ex.submit(discover_search_url, r, cfg): r for r in rows}
+        for i, (fut, r) in enumerate(futs.items(), 1):
+            try:
+                url = fut.result()
+            except Exception:  # noqa: BLE001
+                url = None
+            if url:
+                con.execute("UPDATE stores SET alt_url=?, enabled=1, status='Not tested', fail_streak=0, skip_until=0 WHERE id=?",
+                            (url, r["id"]))
+            out.append({"name": r["name"], "ok": bool(url), "url": url or ""})
+            if progress:
+                progress(i, len(rows))
+    con.commit()
+    return out
 
 
 def health_check(stores: list[dict], cfg: dict | None = None, progress=None, query: str = "tv") -> list[dict]:
