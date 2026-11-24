@@ -7,6 +7,11 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Attach the build to this existing release tag (e.g. v25). Leave empty for a test build."
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -64,19 +69,26 @@ jobs:
           "$h  Deals-Setup.exe" | Out-File -Encoding ascii dist\Deals-Setup.exe.sha256
 
       - name: Upload build (for manual runs)
-        if: ${{ !startsWith(github.ref, 'refs/tags/v') }}
+        if: ${{ !startsWith(github.ref, 'refs/tags/v') && inputs.tag == '' }}
         uses: actions/upload-artifact@v4
         with:
           name: Deals-Setup
           path: dist/Deals-Setup.exe*
 
       - name: Publish release
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: ${{ startsWith(github.ref, 'refs/tags/v') || inputs.tag != '' }}
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           grep -E '^note:' Version.txt | sed -E 's/^note:[[:space:]]*/- /' > notes.md || true
           [ -s notes.md ] || echo "- Improvements and fixes" > notes.md
-          gh release create "$GITHUB_REF_NAME" dist/Deals-Setup.exe dist/Deals-Setup.exe.sha256 \
-            --title "Deals $GITHUB_REF_NAME" --notes-file notes.md
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            # release already exists (e.g. made on the website): attach the files and fill in the notes
+            gh release upload "$TAG" dist/Deals-Setup.exe dist/Deals-Setup.exe.sha256 --clobber
+            gh release edit "$TAG" --title "Deals $TAG" --notes-file notes.md
+          else
+            gh release create "$TAG" dist/Deals-Setup.exe dist/Deals-Setup.exe.sha256 \
+              --title "Deals $TAG" --notes-file notes.md
+          fi
