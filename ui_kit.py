@@ -683,8 +683,9 @@ class Chart:
     """Smooth price-history line chart (oldest to newest) with a soft fill; the last point turns accent
     coloured when the price has fallen."""
 
-    def __init__(self, app, parent, points, height=40, on_click=None):
+    def __init__(self, app, parent, points, height=40, on_click=None, lines=()):
         self.app, self.points = app, points
+        self.lines = [(v, k) for v, k in lines if v]          # [(price, 'target' | 'usual')] dashed guides
         self.cv = app.reg(tk.Canvas(parent, height=px(height), bd=0, highlightthickness=0), "canvas")
         self.cv.bind("<Configure>", lambda e: self.draw(e.width, e.height))
         if on_click:
@@ -693,6 +694,16 @@ class Chart:
 
     def pack(self, **kw):
         self.cv.pack(**kw)
+
+    def _guides(self, w, h, lo, hi, pad):
+        """Dashed lines for the target price (accent) and the usual non-sale price (muted), labelled at the left."""
+        cv, P = self.cv, self.app.P
+        for v, kind in self.lines:
+            y = h / 2 if hi == lo else (h - pad) - (h - 2 * pad) * (v - lo) / (hi - lo)
+            col = P["accent"] if kind == "target" else P["muted"]
+            cv.create_line(pad, y, w - pad, y, fill=col, dash=(4, 3))
+            cv.create_text(pad + px(2), y - px(2), anchor="sw", text="target" if kind == "target" else "usual",
+                           fill=col, font=self.app.f_small)
 
     def draw(self, w, h):
         cv, P, pts, pad = self.cv, self.app.P, self.points, px(6)
@@ -706,7 +717,8 @@ class Chart:
                 r = px(3)
                 cv.create_oval(w - pad - 2 * r, h // 2 - r, w - pad, h // 2 + r, fill=P["fg"], outline=P["fg"])
             return
-        lo, hi, n = min(pts), max(pts), len(pts)
+        every = list(pts) + [v for v, _ in self.lines]
+        lo, hi, n = min(every), max(every), len(pts)
         coords = []
         for i, v in enumerate(pts):
             x = pad + (w - 2 * pad) * i / (n - 1)
@@ -737,9 +749,11 @@ class Chart:
             ph = ImageTk.PhotoImage(big.resize((w, h), _resample()))
             cv._keep.append(ph)
             cv.create_image(0, 0, image=ph, anchor="nw")
+            self._guides(w, h, lo, hi, pad)
             return
         flat = [c for xy in coords for c in xy]
         cv.create_line(*flat, fill=P["fg"], width=max(1, px(1)))
+        self._guides(w, h, lo, hi, pad)
         x, y = coords[-1]
         r = px(3)
         cv.create_oval(x - r, y - r, x + r, y + r, fill=dot, outline=dot)

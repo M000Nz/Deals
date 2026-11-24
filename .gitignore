@@ -1,0 +1,5 @@
+dealscraper.db
+deals_error.log
+snapshots/
+__pycache__/
+*.pyc

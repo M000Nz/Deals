@@ -4,7 +4,7 @@ from pathlib import Path
 
 import engine as E
 
-HERE = Path(__file__).parent / "fixtures"
+HERE = next((p for p in (Path(__file__).parent / "fixtures", Path(__file__).parent / "Fixtures") if p.exists()), Path(__file__).parent / "fixtures")
 # fixture -> {product keyword: (expected price, expected was-price or None)}
 EXPECT = {
     "jsonld_grid.html": {"xm5": (399.0, None), "quietcomfort": (549.0, None)},

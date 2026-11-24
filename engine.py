@@ -36,7 +36,7 @@ from urllib.parse import parse_qs, quote_plus, urlencode, urljoin, urlparse
 import requests
 from bs4 import BeautifulSoup
 
-ENGINE_VERSION = 19
+ENGINE_VERSION = 20
 DB_PATH = Path(__file__).parent / "dealscraper.db"
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
@@ -255,7 +255,7 @@ def select_stores(stores: list[dict], keywords: str, cfg: dict | None = None) ->
 
 DEFAULTS = {"region": "Australia", "interval": "60", "currency": "$", "popups": "1", "theme": "light",
             "auto": "0", "hide_acc": "0", "sort": "Best match", "limited": "0", "browser": "1", "blocked": "ebay", "scope": "smart",
-            "alert_mode": "instant", "quiet_on": "0", "quiet_start": "22", "quiet_end": "7", "summary_hour": "8"}
+            "health_auto": "1", "alert_mode": "instant", "quiet_on": "0", "quiet_start": "22", "quiet_end": "7", "summary_hour": "8"}
 ALERT_MIN_SCORE = 50
 SECRET_KEYS = {"discord", "tg_token", "email_pass"}
 
@@ -290,6 +290,9 @@ def db() -> sqlite3.Connection:
             terms TEXT, found_at REAL, basis TEXT DEFAULT 'was', UNIQUE(kind, url));
         CREATE TABLE IF NOT EXISTS reviews(
             key TEXT PRIMARY KEY, rating REAL, count INTEGER DEFAULT 0, label TEXT, n INTEGER DEFAULT 0, at REAL);
+        CREATE TABLE IF NOT EXISTS saved_searches(
+            id INTEGER PRIMARY KEY, query TEXT NOT NULL, max_price REAL, min_rating REAL,
+            deals_only INTEGER DEFAULT 1, created REAL);
         CREATE TABLE IF NOT EXISTS vocab(word TEXT PRIMARY KEY, n INTEGER NOT NULL DEFAULT 1);
         CREATE TABLE IF NOT EXISTS seen(url TEXT NOT NULL, price REAL NOT NULL, at REAL NOT NULL);
         CREATE INDEX IF NOT EXISTS seen_url ON seen(url, at);
@@ -301,7 +304,8 @@ def db() -> sqlite3.Connection:
     )
     wcols = [r[1] for r in con.execute("PRAGMA table_info(watchlist)")]
     for col, ddl in (("paused", "INTEGER DEFAULT 0"), ("ignore_stores", "TEXT DEFAULT ''"),
-                     ("want_stock", "INTEGER DEFAULT 0"), ("had_stock", "INTEGER DEFAULT 1")):
+                     ("want_stock", "INTEGER DEFAULT 0"), ("had_stock", "INTEGER DEFAULT 1"),
+                     ("folder", "TEXT DEFAULT ''"), ("stock_store", "TEXT DEFAULT ''")):
         if col not in wcols:
             con.execute(f"ALTER TABLE watchlist ADD COLUMN {col} {ddl}")
             con.commit()
@@ -2006,7 +2010,8 @@ def run_check(log=print, on_alert=None, progress=None, only_id: int | None = Non
     else:
         items = con.execute("SELECT * FROM watchlist WHERE COALESCE(paused,0)=0").fetchall()
     stores = active_stores(con, s["region"])
-    if not items:
+    saved = con.execute("SELECT * FROM saved_searches").fetchall() if only_id is None else []
+    if not items and not saved:
         log("Your watchlist is empty - add something first.")
         return 0
     if not stores:
@@ -2015,15 +2020,17 @@ def run_check(log=print, on_alert=None, progress=None, only_id: int | None = Non
     sym, now, sent = s["currency"], time.time(), 0
     held = hold_alerts(s)
     log(f"Checking {len(items)} item(s) across {len(stores)} sources" + (" (alerts held until your summary / quiet hours end)" if held else ""))
-    results = find_offers_many([(it["id"], it["keywords"]) for it in items], stores, s,
-                               progress=progress, deadline=75.0)
+    results = find_offers_many([(it["id"], it["keywords"]) for it in items] + [(f"s{x['id']}", x["query"]) for x in saved],
+                               stores, s, progress=progress, deadline=75.0)
 
     for item in items:
         ranked, report = results[item["id"]]
         skip = [w.strip().lower() for w in (item["ignore_stores"] or "").split(",") if w.strip()]
         offers = sorted((o for o in ranked if o.score >= ALERT_MIN_SCORE and not o.accessory and not o.used
                          and not any(w in o.store.lower() for w in skip)), key=lambda o: o.price)
-        stock_now = [o for o in offers if not o.oos and (item["max_price"] is None or o.price <= item["max_price"])]
+        only_at = (item["stock_store"] or "").strip().lower()
+        stock_now = [o for o in offers if not o.oos and (item["max_price"] is None or o.price <= item["max_price"])
+                     and (not only_at or only_at in o.store.lower())]
         if item["want_stock"] and not item["had_stock"] and stock_now:        # it was all sold out before; now it's not
             o = stock_now[0]
             if not already_alerted(con, item["id"], o.url, o.price):
@@ -2067,11 +2074,169 @@ def run_check(log=print, on_alert=None, progress=None, only_id: int | None = Non
                     "WHERE id=?", (best.price if best else None, best.store if best else None,
                                    best.title if best else None, best.url if best else None, now, item["id"]))
         con.commit()
+    for ss in saved:
+        try:
+            ranked, _rep = results[f"s{ss['id']}"]
+            for o, why in saved_matches(con, ss, ranked, sym):
+                subject = f"{ss['query']}: {o.title[:50]} - {money(sym, o.price)} at {o.store}"
+                if not held:
+                    notify(s, subject, f"{o.title}\n{money(sym, o.price)} ({why})\n{o.url}", o.url, log)
+                con.execute("INSERT INTO alerts(item_id,keywords,title,store,url,price,reasons,sent_at,notified) "
+                            "VALUES(?,?,?,?,?,?,?,?,?)", (-ss["id"], ss["query"], o.title, o.store, o.url, o.price, why,
+                                                         now, 0 if held else 1))
+                sent += 1
+                if on_alert and not held:
+                    on_alert({"keywords": ss["query"], "title": o.title, "store": o.store, "price": o.price,
+                              "url": o.url, "reasons": why})
+            con.commit()
+        except Exception as e:  # noqa: BLE001
+            log(f"saved search '{ss['query']}' failed: {e}")
     try:
         send_pending(con, s, log)
     except Exception as e:  # noqa: BLE001
         log(f"summary failed: {e}")
     return sent
+
+
+# --------------------------------------------------------------------------- #
+# Saved searches, buy hints, price-match text, reports, import, updates
+# --------------------------------------------------------------------------- #
+def review_rating(info: dict | None) -> float | None:
+    """Plain star rating (out of 5) from a review-info dict, or None."""
+    if not info:
+        return None
+    if info.get("rating"):
+        return float(info["rating"])
+    if info.get("pr"):
+        return float(info["pr"][0])
+    return None
+
+
+def saved_matches(con, ss, ranked: list[Offer], sym: str = "$", limit: int = 3) -> list[tuple[Offer, str]]:
+    """Offers that fit a saved search (price cap, real discount, minimum stars) and haven't been alerted before."""
+    cands = [o for o in ranked if o.score >= ALERT_MIN_SCORE and not o.accessory and not o.used and not o.oos]
+    if ss["max_price"]:
+        cands = [o for o in cands if o.price <= ss["max_price"]]
+    if ss["deals_only"]:
+        cands = [o for o in cands if deal_pct(o)[1]]
+    out = []
+    for o in sorted(cands, key=lambda o: o.price)[:10]:
+        if already_alerted(con, -ss["id"], o.url, o.price):
+            continue
+        why = [f"saved search '{ss['query']}'"]
+        pct, kind = deal_pct(o)
+        if kind and pct:
+            why.append(f"{pct:.0f}% off")
+        if ss["min_rating"]:
+            r = review_rating(review_info_for(o))
+            if r is None or r < ss["min_rating"]:
+                continue
+            why.append(f"\u2605 {r:.1f}")
+        out.append((o, "; ".join(why)))
+        if len(out) >= limit:
+            break
+    return out
+
+
+def next_sale_event(now: float | None = None, within: int = 45) -> tuple[str, int] | None:
+    """(name, days away) of the next big Australian sale event within `within` days."""
+    t = time.localtime(now or time.time())
+    today = datetime(t.tm_year, t.tm_mon, t.tm_mday)
+    found = []
+    for yr in (t.tm_year, t.tm_year + 1):
+        d = datetime(yr, 11, 1)
+        fridays = [d.replace(day=n) for n in range(1, 31) if d.replace(day=n).weekday() == 4]
+        bf = fridays[3]                                   # fourth Friday of November
+        found += [("Black Friday", bf), ("Cyber Monday", bf.replace(day=bf.day + 3)),
+                  ("Boxing Day sales", datetime(yr, 12, 26)), ("End of financial year sales", datetime(yr, 6, 15)),
+                  ("Click Frenzy", datetime(yr, 11, 11))]
+    best = None
+    for name, day in found:
+        n = (day - today).days
+        if 0 < n <= within and (best is None or n < best[1]):
+            best = (name, n)
+    return best
+
+
+def buy_hint(price: float | None, reg: float | None, hist_prices: list[float], now: float | None = None) -> tuple[str, str]:
+    """('good' | 'wait' | 'ok', one-line advice) from the price against its history and the sale calendar."""
+    if not price:
+        return "ok", ""
+    ev = next_sale_event(now)
+    if len(hist_prices) >= 5 and price <= min(hist_prices) * 1.005 and max(hist_prices) > price * 1.03:
+        return "good", "Lowest price we've tracked - a good time to buy"
+    if reg and price <= reg * 0.85:
+        return "good", f"{100 * (reg - price) / reg:.0f}% below its usual price - a good time to buy"
+    if ev and (not reg or price >= reg * 0.95):
+        return "wait", f"{ev[0]} is {ev[1]} day{'s' if ev[1] != 1 else ''} away - it may drop further, so consider waiting"
+    if reg and price > reg * 1.05:
+        return "wait", f"{100 * (price - reg) / reg:.0f}% above its usual price - worth waiting"
+    return "ok", "Around its usual price"
+
+
+def price_match_text(title: str, cheaper: Offer, my_store: str, sym: str = "$") -> str:
+    """A short message to send a shop asking them to match a cheaper price."""
+    return (f"Hi {my_store} team,\n\nI'd like to buy the {title} from you, but I've found it for "
+            f"{money(sym, cheaper.price)} at {cheaper.store}:\n{cheaper.url}\n\n"
+            f"Could you please match that price? Happy to complete my order straight away if you can.\n\nThanks!")
+
+
+def import_items(con, lines: list[str], cfg: dict | None = None, log=print) -> tuple[int, int, list[str]]:
+    """Add many watchlist items at once. A line is a product name or a product link. Returns (added, already_there, failed)."""
+    added = dup = 0
+    failed: list[str] = []
+    have = {norm(r["keywords"]) for r in con.execute("SELECT keywords FROM watchlist")}
+    for raw in lines:
+        line = raw.strip()
+        if not line:
+            continue
+        try:
+            kw = product_from_url(line, cfg)["query"] if is_url(line) else line
+        except Exception as e:  # noqa: BLE001
+            failed.append(f"{line[:60]} ({e})")
+            continue
+        if not parse_keywords(kw)[0]:
+            failed.append(line[:60])
+        elif norm(kw) in have:
+            dup += 1
+        else:
+            con.execute("INSERT INTO watchlist(keywords) VALUES(?)", (kw,))
+            have.add(norm(kw))
+            added += 1
+    con.commit()
+    return added, dup, failed
+
+
+def watch_report_html(con, sym: str = "$") -> str:
+    rows = con.execute("SELECT * FROM watchlist ORDER BY COALESCE(folder,''), id").fetchall()
+    out = ["<!doctype html><meta charset='utf-8'><title>Deals - Watchlist report</title>"
+           "<style>body{font:14px system-ui;margin:32px;color:#111}table{border-collapse:collapse;width:100%}"
+           "td,th{border-bottom:1px solid #ddd;padding:8px;text-align:left}th{font-size:12px;color:#666}"
+           ".g{color:#047857;font-weight:600}</style>",
+           f"<h1>Watchlist report</h1><p>{time.strftime('%d %b %Y %H:%M')}</p>",
+           "<table><tr><th>Item</th><th>Best now</th><th>Store</th><th>Target</th><th>Usual price</th><th>Lowest tracked</th><th>Checks</th></tr>"]
+    for r in rows:
+        hist = price_history(con, r["id"])
+        ps = [h["price"] for h in hist]
+        reg = regular_price(con, r["id"])
+        best = money(sym, r["best_price"]) if r["best_price"] is not None else "-"
+        hit = r["max_price"] is not None and r["best_price"] is not None and r["best_price"] <= r["max_price"]
+        out.append("<tr><td>%s%s</td><td class='%s'>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%s</td><td>%d</td></tr>" % (
+            _html.escape(r["keywords"]), f" <small>[{_html.escape(r['folder'])}]</small>" if r["folder"] else "",
+            "g" if hit else "", best, _html.escape(r["best_store"] or "-"),
+            money(sym, r["max_price"]) if r["max_price"] is not None else "-",
+            money(sym, reg[0]) if reg else "-", money(sym, min(ps)) if ps else "-", len(ps)))
+    out.append("</table>")
+    return "".join(out)
+
+
+def check_update(url: str) -> tuple[int | None, str]:
+    """Reads a small text file at `url`: first line = newest engine version number, second line (optional) = download page."""
+    try:
+        lines = fetch(url, timeout=(5, 8)).strip().splitlines()
+        return int(lines[0].strip()), (lines[1].strip() if len(lines) > 1 else "")
+    except (FetchError, ValueError, IndexError):
+        return None, ""
 
 
 # --------------------------------------------------------------------------- #

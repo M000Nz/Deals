@@ -6,6 +6,7 @@ Start it with start.bat (Windows) / start.command (Mac), or: python DealScraper.
 import importlib
 import importlib.util
 import io
+import json
 import os
 import queue
 import random
@@ -96,7 +97,7 @@ def ensure_deps():
 ensure_deps()
 import engine as E  # noqa: E402
 
-if getattr(E, "ENGINE_VERSION", 0) < 19:
+if getattr(E, "ENGINE_VERSION", 0) < 20:
     _r = tk.Tk()
     _r.withdraw()
     messagebox.showerror("Deals", "engine.py is out of date.\n\nReplace it with the new engine.py from the "
@@ -113,6 +114,9 @@ from ui_kit import RoundButton, Switch, PillEntry, ScrollFrame, Chart, draw_rrec
 
 CARD_W, IMG_W, IMG_H = 204, 184, 142        # logical sizes; multiplied by the screen scale at run time
 PAGE = 36
+WATCH_SORTS = ["Added", "Closest to target", "Biggest drop", "Last checked", "Name"]
+PICK_SORTS = ["Biggest savings", "Highest deal score", "Best reviews", "Biggest % off", "Price: high to low",
+              "Price: low to high", "Newest", "Shuffled"]
 SORTS = ["Best match", "Best value", "Price: low to high", "Price: high to low", "Biggest discount", "Deal score", "Ending soon"]
 AUTO = {"Off": 0, "15 min": 15, "30 min": 30, "1 hour": 60, "2 hours": 120,
         "6 hours": 360, "12 hours": 720, "Daily": 1440}
@@ -525,6 +529,7 @@ class Card(tk.Canvas):
         elif self.o.others and self.meta_y[0] <= e.y <= self.meta_y[1]:
             self.app.open_compare(self.o)
         else:
+            self.app.viewed(self.o)
             self.app.open_url(self.o.url)
 
     def _hover(self, on):
@@ -677,7 +682,11 @@ class HistoryDialog(tk.Toplevel):
         if reg:
             app.label(self, f"Usual price (not on sale): {E.money(sym, reg[0])}  -  from {reg[1]} listings", "muted",
                       font=app.f_small).pack(anchor="w", padx=12)
-        Chart(app, self, [h["price"] for h in hist], height=110).pack(fill="x", padx=12, pady=8)
+        Chart(app, self, [h["price"] for h in hist], height=110,
+              lines=[(item["max_price"], "target"), (reg[0] if reg else None, "usual")]).pack(fill="x", padx=12, pady=8)
+        tone, tip = E.buy_hint(item["best_price"], reg[0] if reg else None, [h["price"] for h in hist])
+        if tip and item["best_price"]:
+            app.label(self, tip, "accent" if tone == "good" else "text", font=app.f_small_b).pack(anchor="w", padx=12)
         app.frame(self, "line", height=1).pack(fill="x")
         sf = ScrollFrame(app, self)
         sf.outer.pack(fill="both", expand=True)
@@ -739,12 +748,89 @@ class CompareDialog(tk.Toplevel):
                 app.label(mid, f"~{E.money(sym, E.effective_price(x.price, app.cash_pct))} after {app.cash_pct:g}% cashback",
                           "muted", font=app.f_small).pack(anchor="w")
             app.button(line, "Open", lambda u=x.url: app.open_url(u), pad=(14, 4), font=app.f_small).pack(side="right")
+            if x.price > low and not rows[0].oos:
+                app.button(line, "Price match", lambda x=x: app.copy_price_match(o.title, rows[0], x.store), pad=(12, 4),
+                           font=app.f_small, style="ghost").pack(side="right", padx=(0, 6))
         app.label(body, "Shops can differ on delivery cost and stock - check at the store.", "muted", font=app.f_small).pack(
             anchor="w", pady=(10, 0))
         self.update_idletasks()
         w, h = self.winfo_reqwidth(), self.winfo_reqheight()
         self.geometry(f"+{app.winfo_rootx() + max(0, (app.winfo_width() - w) // 2)}+{app.winfo_rooty() + max(0, (app.winfo_height() - h) // 4)}")
         self.bind("<Escape>", lambda e: self.destroy())
+
+
+class ProductCompare(tk.Toplevel):
+    """2-3 products in columns: the facts that decide a purchase, with the best value in each row highlighted."""
+
+    def __init__(self, app, offers):
+        super().__init__(app)
+        self.title("Compare products")
+        self.transient(app)
+        app.reg(self, "window")
+        sym = app.sym()
+        body = app.frame(self)
+        body.pack(padx=18, pady=14)
+        low = min(o.price for o in offers)
+        scores = [app.deal_score(o)[0] for o in offers]
+        rats = [E.review_rating(app.rev_info.get(o.url)) for o in offers]
+        best_sc = max(scores)
+        best_rt = max((r for r in rats if r), default=None)
+        rows = [("", [o.title[:70] for o in offers], None),
+                ("Store", [o.store for o in offers], None),
+                ("Price", [E.money(sym, o.price) for o in offers], [o.price == low for o in offers]),
+                ("Was", [E.money(sym, o.was_price) if o.was_price and o.was_price > o.price else "-" for o in offers], None),
+                ("Discount", [f"{E.deal_pct(o)[0]:.0f}% off" if E.deal_pct(o)[0] else "-" for o in offers], None),
+                ("Deal score", [f"{sc}  {E.deal_score(o)[1]}" if sc else "-" for sc, o in zip(scores, offers)],
+                 [sc == best_sc and sc > 0 for sc in scores]),
+                ("Reviews", [E.review_verdict(app.rev_info.get(o.url))[1] or "not checked yet" for o in offers],
+                 [bool(r) and r == best_rt for r in rats]),
+                ("Price history", [E.price_verdict(o, app.hist.get(o.url))[1] or "-" for o in offers], None),
+                ("Also at", [f"{len(o.others)} other store(s) from {E.money(sym, min(x.price for x in o.others))}" if o.others else "-"
+                             for o in offers], None)]
+        for r, (name, vals, best) in enumerate(rows):
+            app.label(body, name, "muted", font=app.f_small).grid(row=r, column=0, sticky="nw", padx=(0, 14), pady=5)
+            for c, v in enumerate(vals):
+                hi = bool(best and best[c])
+                app.label(body, v, "accent" if hi else "text", font=app.f_big if name == "Price" else
+                          (app.f_bold if name in ("", "Deal score") or hi else app.f_small),
+                          wraplength=210, justify="left").grid(row=r, column=c + 1, sticky="nw", padx=8, pady=5)
+        for c, o in enumerate(offers):
+            app.button(body, "Open", lambda u=o.url: app.open_url(u), pad=(14, 4), font=app.f_small).grid(
+                row=len(rows), column=c + 1, sticky="w", padx=8, pady=(8, 0))
+        app.button(body, "Clear", lambda: (app.cmp.clear(), self.destroy()), pad=(12, 4), style="ghost",
+                   font=app.f_small).grid(row=len(rows), column=0, sticky="w", pady=(8, 0))
+        self.update_idletasks()
+        w, h = self.winfo_reqwidth(), self.winfo_reqheight()
+        self.geometry(f"+{app.winfo_rootx() + max(0, (app.winfo_width() - w) // 2)}+{app.winfo_rooty() + max(0, (app.winfo_height() - h) // 4)}")
+        self.bind("<Escape>", lambda e: self.destroy())
+
+
+class TextDialog(tk.Toplevel):
+    """Modal box with a multi-line text area. `.result` is the text, or None if cancelled."""
+
+    def __init__(self, app, title, intro, ok_text="add"):
+        super().__init__(app)
+        self.result = None
+        self.title(title[:1].upper() + title[1:])
+        self.transient(app)
+        app.reg(self, "window")
+        body = app.frame(self)
+        body.pack(padx=14, pady=12)
+        app.label(body, intro, "muted", font=app.f_small, wraplength=460, justify="left").pack(anchor="w", pady=(0, 8))
+        self.txt = app.reg(tk.Text(body, width=60, height=10, bd=0, highlightthickness=1, font=app.f_norm, wrap="word"), "entry")
+        self.txt.pack()
+        bar = app.frame(body)
+        bar.pack(fill="x", pady=(10, 0))
+        app.button(bar, ok_text, self.ok, pad=(16, 5), style="solid").pack(side="right")
+        app.button(bar, "cancel", self.destroy, pad=(14, 5), style="ghost").pack(side="right", padx=(0, 8))
+        self.bind("<Escape>", lambda e: self.destroy())
+        self.txt.focus_set()
+        self.grab_set()
+        app.wait_window(self)
+
+    def ok(self):
+        self.result = self.txt.get("1.0", "end").strip()
+        self.destroy()
 
 
 class App(tk.Tk):
@@ -1001,7 +1087,8 @@ class App(tk.Tk):
                          ("reset built-in list", self.reset_stores)]),
             ("Settings", [("alerts...", self.open_alerts), ("browser mode...", lambda: StoresDialog(self)),
                           ("hidden sites...", self.open_hidden), ("cashback %...", self.open_cashback),
-                          ("check all sources...", self.run_health),
+                          ("check all sources...", self.run_health), ("weekly source check on / off", self.toggle_health),
+                          ("export Watchlist report...", self.export_report),
                           ("run at startup on / off", self.toggle_autostart), None,
                           ("export data (CSV)...", self.export_data), ("back up database...", self.backup_data),
                           ("restore database...", self.restore_data), None,
@@ -1009,6 +1096,7 @@ class App(tk.Tk):
             ("Help", [("how it works", lambda: messagebox.showinfo("How it works", HOW)),
                       ("fair use and privacy", lambda: messagebox.showinfo("Fair use and privacy", TERMS)),
                       ("open error log", self.open_error_log), ("run self-check", self.run_selftest),
+                      ("check for updates...", self.check_updates),
                       ("about", lambda: messagebox.showinfo("About", "Deals\nAustralian deal finder."))]),
         ]
         for i, (name, items) in enumerate(reversed(menus)):
@@ -1061,6 +1149,11 @@ class App(tk.Tk):
         self.daily = ScrollFrame(self, self.main)
         self.foryou = ScrollFrame(self, self.main)
         self.picking, self.pick_cells, self._pick_cols, self.daily_shuffle = None, [], {}, None
+        self.pick_sorts = {"daily": "Biggest savings", "foryou": "Newest"}
+        self.cmp = []                                                    # products chosen for side-by-side compare
+        self.watch_sort = E.get_settings(E.db()).get("watch_sort") or "Added"
+        if self.watch_sort not in WATCH_SORTS:
+            self.watch_sort = "Added"
         self.daily.on_width = lambda w: self.on_pick_width("daily", w)
         self.foryou.on_width = lambda w: self.on_pick_width("foryou", w)
         self.build_home()
@@ -1125,6 +1218,17 @@ class App(tk.Tk):
         con = E.db()
         watch = [r["keywords"] for r in con.execute("SELECT keywords FROM watchlist ORDER BY id LIMIT 5")]
         recent = [x for x in E.get_settings(con).get("recent", "").split("\n") if x][:5]
+        try:
+            seen = [tuple(x) for x in json.loads(E.get_settings(con).get("viewed") or "[]")][:5]
+        except (ValueError, TypeError):
+            seen = []
+        if seen:
+            row = self.frame(self.chips)
+            row.pack(pady=4)
+            self.label(row, "Viewed", "muted", font=self.f_small).pack(side="left", padx=(0, 8))
+            for t, u in seen:
+                lab = t if len(t) <= 26 else t[:25] + "\u2026"
+                self.button(row, lab, lambda u=u: self.open_url(u), pad=(11, 3), font=self.f_small).pack(side="left", padx=3)
         for title, items in (("Watching", watch), ("Recent", recent)):
             if not items:
                 continue
@@ -1397,6 +1501,13 @@ class App(tk.Tk):
             m.add_command(label=f"Compare {len(o.others) + 1} stores...", command=lambda: self.open_compare(o))
         m.add_command(label="Add to Watchlist", command=lambda: self.add_watch(card))
         m.add_command(label="Copy deal text", command=lambda: self.copy_deal(o))
+        inc = any(x.url == o.url for x in self.cmp)
+        m.add_command(label="Remove from comparison" if inc else f"Add to side-by-side comparison ({len(self.cmp)}/3)",
+                      command=lambda: self.toggle_compare(o))
+        if len(self.cmp) >= 2:
+            m.add_command(label=f"Compare {len(self.cmp)} products now...", command=self.open_compare_products)
+        if self.cmp:
+            m.add_command(label="Clear comparison", command=lambda: self.cmp.clear())
         sc, lab, why = self.deal_score(o)
         if sc:
             m.add_separator()
@@ -1407,6 +1518,39 @@ class App(tk.Tk):
             m.tk_popup(e.x_root, e.y_root)
         finally:
             m.grab_release()
+
+    def copy_price_match(self, title, cheaper, store):
+        try:
+            self.clipboard_clear()
+            self.clipboard_append(E.price_match_text(title[:90], cheaper, store, self.sym()))
+            self.toast(f"Price-match message for {store} copied - paste it into their chat or email")
+        except tk.TclError:
+            pass
+
+    def toggle_compare(self, o):
+        if any(x.url == o.url for x in self.cmp):
+            self.cmp = [x for x in self.cmp if x.url != o.url]
+            return self.toast(f"Removed - {len(self.cmp)} selected")
+        if len(self.cmp) >= 3:
+            return self.toast("Compare up to 3 at a time - clear one first")
+        self.cmp.append(o)
+        if len(self.cmp) >= 2:
+            self.toast(f"{len(self.cmp)} selected", self.open_compare_products, label="Compare now")
+        else:
+            self.toast("Pick one more product (right-click > Add to comparison)")
+
+    def open_compare_products(self):
+        if len(self.cmp) >= 2:
+            ProductCompare(self, list(self.cmp))
+
+    def viewed(self, o):
+        try:
+            con = E.db()
+            old = json.loads(E.get_settings(con).get("viewed") or "[]")
+            old = [x for x in old if x[1] != o.url]
+            E.set_setting(con, "viewed", json.dumps([[o.title[:80], o.url]] + old[:7]))
+        except Exception:  # noqa: BLE001
+            pass
 
     def copy_deal(self, o):
         sym = self.sym()
@@ -1420,7 +1564,7 @@ class App(tk.Tk):
         except tk.TclError:
             pass
 
-    def toast(self, text, undo=None, secs=8):
+    def toast(self, text, undo=None, secs=8, label="Undo"):
         """A small bar at the bottom of the window, with an optional Undo."""
         try:
             self._toast.destroy()
@@ -1430,7 +1574,7 @@ class App(tk.Tk):
         box = tk.Frame(self, bg=P["fg"], padx=px(14), pady=px(8))
         tk.Label(box, text=text, bg=P["fg"], fg=P["bg"], font=self.f_small).pack(side="left")
         if undo:
-            u = tk.Label(box, text="  Undo", bg=P["fg"], fg=P["bg"], font=self.f_small_b, cursor="hand2")
+            u = tk.Label(box, text="  " + label, bg=P["fg"], fg=P["bg"], font=self.f_small_b, cursor="hand2")
             u.pack(side="left")
             u.bind("<Button-1>", lambda e: (box.destroy(), undo()))
         box.place(relx=0.5, rely=1.0, anchor="s", y=-px(28))
@@ -1581,7 +1725,9 @@ class App(tk.Tk):
     def reviews_done(self):
         self.rev_busy = False
         self.set_status("ready")
-        if self.rev_mode in ("Hide poor reviews", "Only 4 stars and up") and self.view in ("results", "daily", "foryou"):
+        by_rev = self.view in ("daily", "foryou") and self.pick_sorts.get(self.view) in ("Best reviews", "Highest deal score") \
+            and not (self.view == "daily" and self.daily_shuffle)
+        if (self.rev_mode in ("Hide poor reviews", "Only 4 stars and up") or by_rev) and self.view in ("results", "daily", "foryou"):
             self.render_picks(self.view) if self.view != "results" else self.render_results()
         else:
             for urlcards in self.cards_by_url.values():          # swap "Checking reviews..." for "No reviews found"
@@ -1831,6 +1977,9 @@ class App(tk.Tk):
             self.label(row, f"Showing results for \"{self.fixed[1]}\".  ", "text", font=self.f_small_b).pack(side="left")
             self.button(row, f"Search instead for \"{self.fixed[0]}\"", self.search_exact, pad=(10, 3),
                         font=self.f_small).pack(side="left")
+        if self.query and not getattr(self, "link_info", None):
+            self.button(inner, "Save this search as an alert", lambda: self.save_search_form(self.query), pad=(12, 4),
+                        style="ghost", font=self.f_small).pack(anchor="w", padx=16, pady=(8, 0))
         if getattr(self, "did_mean", None):
             row = self.frame(inner)
             row.pack(anchor="w", padx=16, pady=(8, 0))
@@ -1970,6 +2119,46 @@ class App(tk.Tk):
         self.daily_shuffle = random.randint(1, 10 ** 9)
         self.render_picks("daily")
 
+    def set_pick_sort(self, kind, v):
+        if v == "Shuffled":
+            if kind == "daily":
+                return self.shuffle_daily()
+            v = "Newest"
+        self.pick_sorts[kind] = v
+        if kind == "daily":
+            self.daily_shuffle = None
+        self.render_picks(kind)
+
+    def sort_picks(self, offers, kind, con):
+        """Order Daily deals / For you by the chosen sort (or a random mix after Shuffle)."""
+        try:
+            self.hist = E.history_stats(con, [o.url for o in offers])
+        except Exception:  # noqa: BLE001
+            self.hist = {}
+        self.prev_prices = {}
+        if kind == "daily" and self.daily_shuffle and len(offers) > 1:
+            rnd = random.Random(self.daily_shuffle)
+            offers.sort(key=lambda o: rnd.random() ** (1.0 / (1 + max(0.0, (o.was_price or 0) - o.price) ** 0.5)), reverse=True)
+            return
+        mode = self.pick_sorts.get(kind, "Newest")
+        save = lambda o: max(0.0, (o.was_price or o.ref_price or 0) - o.price)
+        pctoff = lambda o: save(o) / (o.was_price or o.ref_price or 1)
+        if mode == "Biggest savings":
+            offers.sort(key=lambda o: -save(o))
+        elif mode == "Biggest % off":
+            offers.sort(key=lambda o: -pctoff(o))
+        elif mode == "Highest deal score":
+            offers.sort(key=lambda o: (-self.deal_score(o)[0], -save(o)))
+        elif mode == "Best reviews":
+            def rk(o):
+                r = E.review_rating(self.rev_info.get(o.url))
+                return (r is None, -(r or 0), -save(o))
+            offers.sort(key=rk)
+        elif mode == "Price: high to low":
+            offers.sort(key=lambda o: -o.price)
+        elif mode == "Price: low to high":
+            offers.sort(key=lambda o: o.price)
+
     def pick_title(self, kind):
         return ("Finding today's biggest discounts..." if kind == "daily" else "Looking for deals you might like...")
 
@@ -2029,11 +2218,7 @@ class App(tk.Tk):
         self.thumb_targets, self.cards_by_url, self._typical = {}, {}, None
         inner, sym, con = sf.inner, self.sym(), E.db()
         offers = E.pick_offers(con, kind)
-        if kind == "daily":
-            offers.sort(key=lambda o: -(((o.was_price or 0) - o.price)))
-            if self.daily_shuffle and len(offers) > 1:             # a fresh random mix, leaning towards bigger savings
-                rnd = random.Random(self.daily_shuffle)
-                offers.sort(key=lambda o: rnd.random() ** (1.0 / (1 + max(0.0, (o.was_price or 0) - o.price) ** 0.5)), reverse=True)
+        self.sort_picks(offers, kind, con)
         self.pick_pool = list(offers[:80 if kind == "daily" else 60])
         self.rev_hidden = 0
         if self.rev_mode in ("Hide poor reviews", "Only 4 stars and up"):
@@ -2051,10 +2236,13 @@ class App(tk.Tk):
         if kind == "daily":
             self.button(hdr, "Shuffle", self.shuffle_daily, pad=(14, 5), style="solid").pack(side="right", padx=(0, 8))
         self.dropdown(hdr, "reviews: ", E.REVIEW_MODES, lambda: self.rev_mode, self.set_reviews).pack(side="right", padx=(0, 10))
+        self.dropdown(hdr, "sort: ", PICK_SORTS,
+                      lambda k=kind: "Shuffled" if (k == "daily" and self.daily_shuffle) else self.pick_sorts.get(k, "Newest"),
+                      lambda v, k=kind: self.set_pick_sort(k, v)).pack(side="right", padx=(0, 10))
         age = E.picks_age(con, kind)
         if kind == "daily":
             sub = (f"Big-ticket items (over {sym}{E.DAILY_MIN_PRICE:.0f}) that are at least {E.DAILY_MIN_PCT:.0f}% off, "
-                   f"biggest savings first. Updated {self.ago(age)}.")
+                   f"sorted as you choose. Updated {self.ago(age)}.")
         else:
             sub = ("Discounted items similar to what you follow. Tap Interested or Not interested and the "
                    f"suggestions get better each time you Find more. Updated {self.ago(age)}.")
@@ -2202,11 +2390,13 @@ class App(tk.Tk):
         sf.clear()
         self.prune()
         inner, sym, con = sf.inner, self.sym(), E.db()
-        items = con.execute("SELECT * FROM watchlist ORDER BY id").fetchall()
+        items = self.sorted_items(con, con.execute("SELECT * FROM watchlist ORDER BY id").fetchall())
         hdr = self.frame(inner)
         hdr.pack(fill="x", padx=26, pady=(18, 2))
         self.label(hdr, "Watchlist", font=self.f_page).pack(side="left")
         self.button(hdr, "+ Add item", self.add_item, font=self.f_bold, pad=(16, 6), style="solid").pack(side="right")
+        self.button(hdr, "Import list", self.import_list, pad=(14, 5), style="ghost").pack(side="right", padx=(0, 8))
+        self.dropdown(hdr, "sort: ", WATCH_SORTS, lambda: self.watch_sort, self.set_watch_sort).pack(side="right", padx=(0, 8))
         self.dropdown(hdr, "auto: ", list(AUTO),
                       lambda: next((k for k, v in AUTO.items() if v == self.auto_minutes), "Off"),
                       self.set_auto).pack(side="right", padx=(0, 8))
@@ -2232,8 +2422,34 @@ class App(tk.Tk):
             self.label(inner, "Add an item and you'll be alerted when it drops in price, hits your target, "
                               "or appears as a discounted OzBargain deal.", "muted", wraplength=520,
                        justify="left").pack(anchor="w", padx=26)
+        last_folder = object()
+        grouped = any((r["folder"] or "").strip() for r in items)
         for r in items:
+            fol = (r["folder"] or "").strip()
+            if grouped and fol != last_folder:
+                last_folder = fol
+                self.label(inner, (fol or "Unfiled").upper(), "muted", font=self.f_small_b).pack(anchor="w", padx=26, pady=(16, 0))
             self.watch_row(inner, r, sym, con)
+
+        sh = self.frame(inner)
+        sh.pack(fill="x", padx=26, pady=(26, 2))
+        self.label(sh, "Saved searches", font=self.f_big).pack(side="left")
+        self.button(sh, "+ Add", lambda: self.save_search_form(""), pad=(10, 3), style="ghost", font=self.f_small).pack(side="right")
+        saved = con.execute("SELECT * FROM saved_searches ORDER BY id").fetchall()
+        if not saved:
+            self.label(inner, "Get alerted when anything new matches a search - e.g. router under $150 with 4 stars and up. "
+                              "Use Save search on the results page.", "muted", font=self.f_small, wraplength=700,
+                       justify="left").pack(anchor="w", padx=26, pady=(2, 6))
+        for ss in saved:
+            line = self.frame(inner)
+            line.pack(fill="x", padx=26, pady=3)
+            crit = ([f"under {E.money(sym, ss['max_price'])}"] if ss["max_price"] else []) + (
+                [f"{ss['min_rating']:g}\u2605 and up"] if ss["min_rating"] else []) + (
+                ["real discounts only"] if ss["deals_only"] else ["any price drop or listing"])
+            self.label(line, ss["query"], font=self.f_bold).pack(side="left")
+            self.label(line, "   " + "  \u00b7  ".join(crit), "muted", font=self.f_small).pack(side="left")
+            self.button(line, "Remove", lambda i=ss["id"]: self.remove_saved(i), pad=(12, 3), style="ghost",
+                        font=self.f_small).pack(side="right")
 
         head = self.frame(inner)
         head.pack(fill="x", padx=26, pady=(26, 2))
@@ -2260,6 +2476,98 @@ class App(tk.Tk):
             for w in (row, price, mid, t1, t2, t3):
                 w.bind("<Button-1>", lambda e, u=r["url"]: self.open_url(u))
                 w.configure(cursor="hand2")
+
+    def sorted_items(self, con, items):
+        mode = self.watch_sort
+        items = list(items)
+        if mode == "Closest to target":
+            gap = lambda r: ((r["best_price"] - r["max_price"]) / r["max_price"]
+                             if r["max_price"] and r["best_price"] is not None else 9e9)
+            items.sort(key=gap)
+        elif mode == "Biggest drop":
+            def drop(r):
+                ps = [h["price"] for h in E.price_history(con, r["id"])]
+                return -(100 * (ps[0] - ps[-1]) / ps[0]) if len(ps) > 1 and ps[0] else 0
+            items.sort(key=drop)
+        elif mode == "Last checked":
+            items.sort(key=lambda r: -(r["checked_at"] or 0))
+        elif mode == "Name":
+            items.sort(key=lambda r: r["keywords"].lower())
+        items.sort(key=lambda r: ((r["folder"] or "").strip() == "", (r["folder"] or "").strip().lower()))   # folders together
+        return items
+
+    def set_watch_sort(self, v):
+        self.watch_sort = v
+        E.set_setting(E.db(), "watch_sort", v)
+        self.render_watch()
+
+    def import_list(self):
+        d = TextDialog(self, "import list", "One product per line: a name (like  sony wh-1000xm5) or a product link. "
+                       "Links are read and added by product, not by store.").result
+        if not d:
+            return
+        lines = [x for x in d.splitlines() if x.strip()]
+        self.set_status(f"importing {len(lines)} item(s)...")
+        cfg = E.get_settings(E.db())
+
+        def work():
+            try:
+                res = E.import_items(E.db(), lines, cfg)
+            except Exception:  # noqa: BLE001
+                log_error(traceback.format_exc())
+                res = (0, 0, ["import crashed - see the error log"])
+            self.q.put(lambda: self.import_done(res))
+        threading.Thread(target=work, daemon=True).start()
+
+    def import_done(self, res):
+        added, dup, failed = res
+        self.set_status("ready")
+        self.render_watch()
+        msg = f"Added {added} item(s)" + (f", {dup} already on your list" if dup else "")
+        self.toast(msg)
+        if failed:
+            messagebox.showinfo("import list", "These lines couldn't be added:\n" + "\n".join(failed[:10]))
+
+    def save_search_form(self, q):
+        d = Form(self, "save search", [
+            {"key": "query", "label": "search for", "default": q, "hint": "e.g.  router   or   sony wh-1000xm5"},
+            {"key": "max", "label": "only under", "width": 10, "default": "", "hint": "Optional price cap, e.g. 150"},
+            {"key": "stars", "label": "stars", "kind": "dropdown", "values": ["any", "3.5", "4", "4.5"], "default": "any",
+             "hint": "Only alert for products rated at least this (checks reviews first)."},
+            {"key": "deals", "label": "real discounts only", "kind": "check", "default": "1"}],
+                 intro="You'll be alerted whenever a new product matches - without having to pick one exact item.",
+                 validate=lambda d: None if E.parse_keywords(d["query"])[0] else "Enter something to search for.").result
+        if not d:
+            return
+        try:
+            mx = float(d["max"].lstrip("$").replace(",", "")) if d["max"].strip() else None
+        except ValueError:
+            mx = None
+        con = E.db()
+        con.execute("INSERT INTO saved_searches(query,max_price,min_rating,deals_only,created) VALUES(?,?,?,?,?)",
+                    (d["query"].strip(), mx, None if d["stars"] == "any" else float(d["stars"]),
+                     1 if d["deals"] == "1" else 0, time.time()))
+        con.commit()
+        self.toast("Search saved - you'll be alerted on every Watchlist check")
+        if self.view == "watch":
+            self.render_watch()
+
+    def remove_saved(self, i):
+        con = E.db()
+        row = con.execute("SELECT * FROM saved_searches WHERE id=?", (i,)).fetchone()
+        if not row:
+            return
+        saved = dict(row)
+        con.execute("DELETE FROM saved_searches WHERE id=?", (i,))
+        con.commit()
+        self.render_watch()
+
+        def undo():
+            c = E.db()
+            c.execute(f"INSERT OR REPLACE INTO saved_searches({','.join(saved)}) VALUES({','.join(':' + k for k in saved)})", saved)
+            c.commit()
+            self.render_watch()
+        self.toast("Saved search removed", undo)
 
     def watch_row(self, parent, r, sym, con):
         self.frame(parent, "line", height=1).pack(fill="x", padx=26, pady=(12, 0))
@@ -2290,15 +2598,15 @@ class App(tk.Tk):
         mid = self.frame(row)
         mid.grid(row=0, column=1, sticky="we", padx=(0, 22))
         hist = E.price_history(con, r["id"])
-        Chart(self, mid, [h["price"] for h in hist][-30:], height=60,
-              on_click=lambda i=r["id"]: HistoryDialog(self, i)).pack(fill="x")
+        reg = E.regular_price(con, r["id"])
+        Chart(self, mid, [h["price"] for h in hist][-30:], height=60, on_click=lambda i=r["id"]: HistoryDialog(self, i),
+              lines=[(r["max_price"], "target"), (reg[0] if reg else None, "usual")]).pack(fill="x")
         parts = history_text(sym, hist).split("\n")
         self.label(mid, parts[0], "muted", font=self.f_small).pack(anchor="w", pady=(4, 0))
         if len(parts) > 1:
             tail = parts[1].split(": ", 1)[-1]
             self.label(mid, parts[1], "accent" if tail.startswith("\u25bc") else "alert" if tail.startswith("\u25b2") else "muted",
                        font=self.f_small).pack(anchor="w")
-        reg = E.regular_price(con, r["id"])
         if reg:
             line = f"Usual price (not on sale): {E.money(sym, reg[0])}"
             tone = "muted"
@@ -2311,6 +2619,11 @@ class App(tk.Tk):
             self.label(mid, line, tone, font=self.f_small).pack(anchor="w")
         elif hist:
             self.label(mid, "Usual price: learning - needs a few more checks", "muted", font=self.f_small).pack(anchor="w")
+        tone, tip = E.buy_hint(r["best_price"], reg[0] if reg else None, [h["price"] for h in hist])
+        if tip and r["best_price"]:
+            self.label(mid, ("\u2713 " if tone == "good" else "\u23f3 " if tone == "wait" else "") + tip,
+                       "accent" if tone == "good" else "text" if tone == "wait" else "muted", font=self.f_small_b if tone != "ok" else self.f_small,
+                       wraplength=520, justify="left").pack(anchor="w")
         right = self.frame(row)
         right.grid(row=0, column=2, sticky="ne")
         if r["best_url"]:
@@ -2353,6 +2666,10 @@ class App(tk.Tk):
              "hint": "Optional. Store names to skip for this item, separated by commas (e.g. kogan, catch)."},
             {"key": "stock", "label": "alert when back in stock", "kind": "check",
              "default": "1" if row and row["want_stock"] else "0"},
+            {"key": "stockstore", "label": "back-in-stock store", "width": 24, "default": (row["stock_store"] or "") if row else "",
+             "hint": "Optional. Only alert when it's back at this store (e.g. jb hi-fi). Blank = any store."},
+            {"key": "folder", "label": "folder", "width": 24, "default": (row["folder"] or "") if row else "",
+             "hint": "Optional. Group items together, e.g. Kitchen or Tech."},
             {"key": "paused", "label": "paused", "kind": "check", "default": "1" if row and row["paused"] else "0"},
         ], validate=validate).result
 
@@ -2362,10 +2679,10 @@ class App(tk.Tk):
             return
         con = E.db()
         target = float(d["target"].lstrip("$").replace(",", "")) if d["target"] else None
-        con.execute("INSERT INTO watchlist(keywords,max_price,min_drop_pct,ignore_stores,want_stock,paused) "
-                    "VALUES(?,?,?,?,?,?)",
+        con.execute("INSERT INTO watchlist(keywords,max_price,min_drop_pct,ignore_stores,want_stock,paused,stock_store,folder) "
+                    "VALUES(?,?,?,?,?,?,?,?)",
                     (d["keywords"], target, float(d["drop"].rstrip("%")), d["ignore"].strip(),
-                     1 if d["stock"] == "1" else 0, 1 if d["paused"] == "1" else 0))
+                     1 if d["stock"] == "1" else 0, 1 if d["paused"] == "1" else 0, d["stockstore"].strip(), d["folder"].strip()))
         con.commit()
         self.render_watch()
         self.set_status("added - press 'check watchlist' to scan")
@@ -2386,9 +2703,10 @@ class App(tk.Tk):
             return
         target = float(d["target"].lstrip("$").replace(",", "")) if d["target"] else None
         con.execute("UPDATE watchlist SET keywords=?, max_price=?, min_drop_pct=?, ignore_stores=?, want_stock=?, "
-                    "paused=? WHERE id=?",
+                    "paused=?, stock_store=?, folder=? WHERE id=?",
                     (d["keywords"], target, float(d["drop"].rstrip("%")), d["ignore"].strip(),
-                     1 if d["stock"] == "1" else 0, 1 if d["paused"] == "1" else 0, i))
+                     1 if d["stock"] == "1" else 0, 1 if d["paused"] == "1" else 0, d["stockstore"].strip(),
+                     d["folder"].strip(), i))
         con.commit()
         self.render_watch()
 
@@ -2483,6 +2801,12 @@ class App(tk.Tk):
                 self.start_check()
             else:
                 self.next_var.set(f"next check in {left // 60}m {left % 60:02d}s")
+        self._ticks = getattr(self, "_ticks", 0) + 1
+        if self._ticks % 300 == 0:
+            try:
+                self.maybe_health()
+            except Exception:  # noqa: BLE001
+                log_error(traceback.format_exc())
         self.after(1000, self.tick)
 
     def show_deal(self, a):
@@ -2612,13 +2936,75 @@ class App(tk.Tk):
                 E.set_setting(con, k, v)
             self.set_status("alert settings saved")
 
-    def run_health(self):
+    def toggle_health(self):
+        con = E.db()
+        on = E.get_settings(con).get("health_auto", "1") != "0"
+        E.set_setting(con, "health_auto", "0" if on else "1")
+        messagebox.showinfo("Deals", "Weekly source check is now " + ("off." if on else "on. Deals will quietly test every "
+                            "source about once a week and tell you if any stop working."))
+
+    def export_report(self):
+        dest = filedialog.asksaveasfilename(title="Save Watchlist report", defaultextension=".html",
+                                            initialfile="watchlist-report.html")
+        if dest:
+            with open(dest, "w", encoding="utf-8") as fh:
+                fh.write(E.watch_report_html(E.db(), self.sym()))
+            self.set_status("report saved - open it in your browser to print or share")
+
+    def check_updates(self, silent=False):
+        con = E.db()
+        url = E.get_settings(con).get("update_url", "")
+        if not url and not silent:
+            d = Form(self, "check for updates", [{"key": "url", "label": "update address", "width": 44, "default": ""}],
+                     intro="Deals can check a web address for a newer version. Put a text file online (e.g. a GitHub raw "
+                           "link) whose first line is the newest engine version number and second line is the download page. "
+                           "Leave blank to skip.").result
+            url = (d or {}).get("url", "").strip()
+            if not url:
+                return
+            E.set_setting(con, "update_url", url)
+        if not url:
+            return
+
+        def work():
+            latest, link = E.check_update(url)
+            self.q.put(lambda: self.update_result(latest, link, silent))
+        threading.Thread(target=work, daemon=True).start()
+
+    def update_result(self, latest, link, silent):
+        if latest is None:
+            return None if silent else messagebox.showinfo("updates", "Couldn't read that update address.")
+        if latest > E.ENGINE_VERSION:
+            self.toast(f"A newer version of Deals is available (v{latest})",
+                       (lambda: self.open_url(link)) if link else None, secs=15, label="Download")
+        elif not silent:
+            messagebox.showinfo("updates", "You have the newest version.")
+
+    def maybe_health(self):
+        """About once a week, quietly test every source and say so if some have stopped working."""
+        if self.scanning or self.searching or self.picking or getattr(self, "_health", False):
+            return
+        con = E.db()
+        st = E.get_settings(con)
+        if st.get("health_auto", "1") == "0":
+            return
+        last = float(st.get("health_at") or 0)
+        if not last:
+            return E.set_setting(con, "health_at", str(time.time()))
+        if time.time() - last < 7 * 86400:
+            return
+        E.set_setting(con, "health_at", str(time.time()))
+        self.run_health(silent=True)
+        if st.get("update_url"):
+            self.check_updates(silent=True)
+
+    def run_health(self, silent=False):
         if self.searching or self.picking or getattr(self, "_health", False):
             return self.set_status("busy - try again in a moment")
-        if not messagebox.askyesno("check sources", "Test every source with a sample search to see which ones still work?\n"
-                                   "This takes a minute or two."):
+        if not silent and not messagebox.askyesno("check sources", "Test every source with a sample search to see which ones still work?\n"
+                                                   "This takes a minute or two."):
             return
-        self._health = True
+        self._health, self._health_silent = True, silent
         con = E.db()
         cfg = E.get_settings(con)
         cfg["region"] = cfg.get("region") or self.region
@@ -2638,6 +3024,12 @@ class App(tk.Tk):
     def health_done(self, res):
         self._health = False
         self.set_status("ready")
+        if getattr(self, "_health_silent", False):
+            self._health_silent = False
+            bad = [r for r in res if r["status"] != "ok"]
+            if bad and len(bad) >= 3:
+                self.toast(f"{len(bad)} of {len(res)} sources need a look - Settings > check all sources", secs=12)
+            return
         if not res:
             return messagebox.showinfo("check sources", "The test couldn't run - see Help > open error log.")
         ok = [r for r in res if r["status"] == "ok"]

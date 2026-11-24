@@ -145,6 +145,19 @@ gift cards, bonuses, delivery, instalments (Zip, Afterpay) and "save $X" are ign
 - **Sharing**: `build_exe.bat` / `build_exe.sh` build a standalone app with PyInstaller (not tested here).
 - Help > "fair use and privacy" explains what the app does and its limits.
 
+## Saved searches, compare, and more (v20)
+- **Saved searches**: Save this search as an alert (results page) or + Add on the Watchlist tab. Set a price cap, a minimum star
+  rating and "real discounts only"; every Watchlist check looks for new matches and alerts you once per product.
+- **Compare side by side**: right-click a card > Add to side-by-side comparison (up to 3), then Compare now. Best price,
+  deal score and rating are highlighted. In the store comparison, **Price match** copies a ready-to-send message.
+- **Daily deals and For you** have a **sort** menu: biggest savings, highest deal score, best reviews, biggest % off, price, newest, shuffled.
+- **Watchlist**: sort (closest to target, biggest drop, last checked, name), **folders**, **Import list** (paste names or links),
+  back-in-stock alerts for one store, dashed **target** and **usual price** lines on the graph, a buy / wait hint that knows the
+  Australian sale calendar, and Settings > export Watchlist report (a printable page).
+- **Recently viewed** products appear on the home page.
+- **Weekly source check** (Settings) tests every store in the background and tells you if several have stopped working.
+- **Check for updates** (Help): point it at a text file you host (first line = newest engine version, second = download page).
+
 ## Deal score, daily summary, quiet hours
 - **Deal score (0-100)** on every deal card: the real discount, whether it's the lowest price we've seen, reviews, price against
   other shops and OzBargain votes. Prices that were never higher than today's score low ("was-price unverified"). Sort by it
