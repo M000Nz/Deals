@@ -1,193 +1,182 @@
-# Deals - Australian deal finder
+<p align="center">
+  <img src="assets/banner.png" alt="Deals - Australian deal finder" width="100%">
+</p>
 
-**Start it:** double-click `start.bat` (Windows) or `start.command` (Mac).
-Needs Python from https://www.python.org/downloads/ (Windows: tick "Add python.exe to PATH").
-First launch installs the small add-ons and offers to set up **browser mode** (below).
-**`DealScraper.pyw`, `engine.py` and `ui_kit.py` must all be the latest versions, in the same folder.**
+<p align="center">
+  <b>Find the real deals across Australian shops - without opening fifty tabs.</b><br>
+  Search once, see genuine discounts first, and get alerted when the price you want shows up.
+</p>
 
-## Where prices come from (Australia only)
-| Source | What it gives you |
+<p align="center">
+  <a href="https://github.com/M000Nz/Deals/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/M000Nz/Deals?style=flat-square&color=10b981&label=release"></a>
+  <img alt="Platform" src="https://img.shields.io/badge/platform-Windows-0a0a0a?style=flat-square">
+  <img alt="Region" src="https://img.shields.io/badge/region-Australia-0a0a0a?style=flat-square">
+  <img alt="Sources" src="https://img.shields.io/badge/sources-180%2B-10b981?style=flat-square">
+  <img alt="Privacy" src="https://img.shields.io/badge/data-stays%20on%20your%20PC-0a0a0a?style=flat-square">
+</p>
+
+<p align="center">
+  <a href="#download">Download</a> ·
+  <a href="#what-it-does">Features</a> ·
+  <a href="#how-it-works">How it works</a> ·
+  <a href="#a-quick-tour">Tour</a> ·
+  <a href="#faq">FAQ</a> ·
+  <a href="#for-developers">Developers</a>
+</p>
+
+---
+
+## Download
+
+1. Open the **[latest release](https://github.com/M000Nz/Deals/releases/latest)** and download **`Deals-Setup.exe`**.
+2. Run it. No Python or other software is needed, and it installs for your user only (no admin prompt).
+3. Open **Deals** from the Start menu or the desktop icon.
+
+> **Windows SmartScreen warning?** The app isn't code-signed yet, so Windows may say it "protected your PC".
+> Click **More info → Run anyway**. Each release ships with a SHA-256 checksum (`Deals-Setup.exe.sha256`) so you can verify it.
+
+**Updates are automatic.** Deals checks for a new version every time it opens. When one is available you press
+**Update** and it downloads, verifies the checksum, installs and reopens itself.
+
+Your watchlist, price history and settings live in `%APPDATA%\Deals`, so updating never touches them.
+
+---
+
+## What it does
+
+| | |
 |---|---|
-| **StaticICE** | Price comparison across 200+ Australian retailers, with the real shop link |
-| **OzBargain** | Community deals from its public RSS feeds, with their end time. Shown **only when the price is discounted** (see below) |
-| **~108 Australian stores** across tech, home, DIY, garden, fashion, sports, outdoors, baby, toys, pets, beauty, auto, books, grocery and more (not eBay) | Direct search of each store's site |
+| **Search everything at once** | One search asks 180+ Australian sources: major retailers, specialist shops, [StaticICE](https://www.staticice.com.au) (200+ more shops) and OzBargain. |
+| **Real discounts first** | A result only counts as a deal if there's evidence: a marked-down price, a price that fell since your last check, or a vetted OzBargain post. Everything else sits under *Regular prices*. |
+| **Watchlist with alerts** | Follow a product, set a target price, and get alerted on desktop, ntfy, Discord, Telegram or email. Each item keeps a price-history graph. |
+| **Daily deals** | The biggest discounts on big-ticket items, refreshed daily. Pick a **category** (golf, cycling, camping, music, gaming...) to search that hobby directly. |
+| **For you** | Suggestions based on what you follow and like, with a few outliers mixed in so it never goes stale. |
+| **Paste a link** | Paste any product link and Deals finds the same product at every other shop. |
+| **Exact matches** | Model numbers are respected - *galaxy watch 6* never shows a Watch 5. Name a brand and only that brand appears. |
+| **Spelling forgiven** | *samsnug galxy* and *play station 5* are corrected automatically. |
+| **Honest prices** | Inflated "was" prices are flagged, junk listings (stickers, cables, parts priced 90%+ below normal) are dropped, and sale-season reminders tell you when to trust the price history. |
+| **Private and light** | Everything stays on your computer. Runs at low priority so it never slows your other programs. |
 
-### Browser mode (JavaScript stores)
-Many stores only show prices after their page runs JavaScript, or refuse plain requests. Browser mode
-loads those in a hidden browser, like a normal visit. It uses **Microsoft Edge or Chrome** if installed
-(nothing big to download); otherwise it downloads Chromium (about 150 MB) once. Set it up from the
-first-run prompt or Sources > manage sources. The app remembers which stores need it and goes straight
-to the browser next time. It can't beat serious bot protection (CAPTCHAs / Cloudflare challenges) -
-those show as "Bot-check page shown". First searches are slower while stores are being learned.
+---
 
-### When is an OzBargain deal "discounted"?
-It's kept if the post lists an RRP/was price, **or** it's at least 5% cheaper than the typical price
-at other shops in the same search. If there's nothing to compare against, a deal with 10+ votes is kept.
-Everything else is hidden.
+## How it works
 
-## The screens
-- **Search tab:** starts on a centred search box (chips for your watchlist items and recent searches).
-  Searching opens the results page; the **Deals** logo or **‹ Home** (Ctrl+H) returns to the start.
-- **Results:** product cards in a grid with large pictures (greyscale by default; Settings > colour
-  pictures). Real discounts are listed first under **DEALS** with the saving in emerald green; everything
-  else follows under **REGULAR PRICES**. If nothing is discounted anywhere you'll see **No current deals found**.
-- **Watchlist tab:** its own page. Each item shows its best price, target, a price-history chart (click it
-  for the full list) and Open / Edit / Remove. **+ Add item**, **Check now** and the auto-check schedule are at
-  the top; **Recent deals** are listed underneath.
-- A result counts as a deal when there is evidence of a discount: the shop shows a was-price, it's a
-  discounted OzBargain post, or its price fell since your last check.
+```
+  You search  ──►  Deals picks the shops that fit the product  ──►  reads each shop in parallel
+                                                                            │
+   Alerts  ◄──  Watchlist re-checks on a schedule  ◄──  ranks by relevance, then by real discount
+```
 
-## Daily deals and For you tabs
-- **Daily deals**: runs a sweep of big-ticket categories (TVs, laptops, fridges, power tools, e-bikes...) and
-  lists items over $150 that are at least 25% below their normal price, biggest dollar saving first, plus
-  OzBargain front-page posts that state both prices. It refreshes about once a day when you open the tab, or
-  press Refresh. Thresholds are `DAILY_MIN_PRICE` / `DAILY_MIN_PCT` at the top of that section in engine.py.
-- **For you**: looks for discounted items *similar* to your Watchlist (same kind of product, any brand).
-  Press **Interested** or **Not interested** on a card. Interested adds that kind of product and brand to
-  what it searches for; a few "No" answers for a product type or brand stop it appearing. Each "Find more"
-  adds up to 12 new suggestions, so it fills in gradually.
-- **Shuffle** (Daily deals) re-mixes the list instantly with a random pick weighted towards bigger savings;
-  **Refresh** does a new sweep of 22 randomly chosen categories out of ~45, so each refresh finds different things.
-- Every card has a **+** button at the top right of its picture that adds the product to your Watchlist.
-  **Interested** only teaches *For you* what you like; it never touches the Watchlist.
-- *For you* is lenient: it accepts 8%+ off, vetted OzBargain posts, and items clearly cheaper than most shops
-  (shown as "below other shops"), and it also looks at neighbouring product types (headphones -> earbuds).
-- eBay stays hidden everywhere except when it comes through an OzBargain post.
+1. **Smart store selection.** Searching *makita drill* visits hardware, general and price-comparison shops - not the beauty or fashion ones. If your words don't hint at a product type, every shop is searched. If a search finds very little, Deals **automatically widens** it to every remaining shop.
+2. **Reading the shop.** Prices are read from each shop's own price markup first. Shops that only show prices after JavaScript runs are opened in a hidden browser (**Microsoft Edge or Chrome** if you have it - nothing big to download).
+3. **Ranking.** Results are ranked by relevance, then real discounts. Accessories (cases, straps, bands) move down. Out-of-stock and refurbished listings are never counted as deals.
+4. **Self-healing sources.** Shops that keep failing are paused automatically so searches stay quick, and **Repair** tries to find a working search address for them.
+5. **Alerts.** The Watchlist re-checks on the schedule you choose and alerts you once per deal, with optional quiet hours and a daily summary.
 
-## Reviews filter
-On the results page (and on Daily deals and For you), **reviews:** in the filter bar has four settings: Off, Show ratings, Hide poor reviews, and
-Only 4 stars and up. When on, the app opens each product's own page for its star rating (from the page's
-structured data) and searches Reddit for what people say about that product, then shows e.g.
-`★ 4.6 (212) · Reddit positive` on the card. Products under 3.5 stars, or that Reddit mostly complains
-about, are marked "Poor reviews" in red; a poorly reviewed product priced well above typical is marked
-"pricey for what it is". Results are cached for 7 days. Reddit often refuses automated lookups; when it does the
-app stops asking for a while and uses product-page ratings alone. Hovering the **+** on a picture shows
-what it does.
+### What counts as a "deal"?
 
-## Smart store selection (keeps big searches fast)
-Searching "makita drill" visits the hardware, general and price-comparison sites, not the beauty or
-fashion shops. Searching "sony headphones" visits the tech and general stores. If your words don't hint at
-a type of product, every store is searched. Prefer the old way? Set `scope` to `all` in the settings table.
-Store web addresses are best-effort: any store that can't be reached is paused automatically.
+A result is a deal when at least one of these is true: the shop shows a **was price**; it's an **OzBargain post** that states a discount (or is clearly cheaper than other shops); or its **price fell** since your last check. Deals also get a **0-100 score** that blends the real discount, whether it's the lowest price seen, reviews, the price against other shops and OzBargain votes.
 
-## Speed
-- A search stops waiting for slow stores once about 85% have answered (it gives them a few more seconds).
-- Pages are parsed with lxml when it is installed (`pip install lxml`), roughly 50x less CPU on big pages
-  than the fallback parser. Browser mode runs 3 pages at once with no pictures or styles.
-Searches and watchlist checks run every store (and every watchlist item) at once instead of one after
-another, with short timeouts, so a slow or dead site can't hold things up:
-- Stores that keep failing (blocked, bot-check, needs JavaScript) are **paused** automatically after 3 failures
-  in a row, then retried after a day (then 2, 4, 7 days). **Sources > Test all** re-checks everything and
-  clears the pauses. Paused stores are labelled in Sources.
-- A site that just failed isn't asked again for the other watchlist items in the same check.
-- Slow stores are cut off (45 s for a search, 75 s for a whole watchlist check) and the rest still show.
-- The same search at the same store within 5 minutes is answered from memory.
-- A **loading screen** with a progress bar shows while searching; the Watchlist tab shows live progress
-  while checking.
+---
 
-## Look and feel
-- A **red dot** appears on the Watchlist tab when a check finds a new deal, and clears when you open the tab.
-- The light/dark toggle (sun and moon) is built to the same height as the tabs so the top bar lines up.
-- Crisp on high-resolution screens (the app is DPI-aware and scales its layout), with anti-aliased rounded
-  buttons, cards, switches and charts, and smooth eased scrolling.
-- On Windows the title bar follows the theme (dark/light, and the exact background colour on Windows 11).
-  The window remembers its size and position, and has its own icon.
-- Model numbers are exact: searching `galaxy watch 6` won't show a Watch 5, `iphone 6` won't show an
-  iPhone 16, `ps5` matches "PlayStation 5".
+## A quick tour
 
-## Searching
-- Ranked by relevance. Name a brand (`apple watch`) and only that brand is shown; name none (`watch`)
-  and all brands show. `-word` excludes.
-- Accessories (bands, straps, cases...) move down, or switch on **hide accessories**.
-- **limited-time only** shows deals with an end date; sort by **Ending soon**.
-- Reductions show in $ and %: `-$300.00 (43% off)`, or `-$70.00 (12% below)` against other shops.
+**Search** - A centred search box with chips for your watchlist and recent searches. Results show large product photos, with real discounts in green under *Deals*.
 
-## Keeping results clean
-- **Hidden sites:** eBay is hidden by default - it never appears in a search or alert, whether it comes from
-  a store, StaticICE or an OzBargain post. Settings > hidden sites lets you add more (comma-separated words
-  from a store's name or address) or clear the list.
-- **Too-cheap listings:** anything priced 90% or more below the typical price of the strong matches
-  (screen stickers, cables, parts) is dropped as irrelevant. The count is shown above the results.
+**Watchlist** - Each item shows its best price, your target, a price-history graph (click for the full list) and quick actions. Collapse any item - or all of them - to a single line with a small graph of the change since the last check (green ▼ cheaper, red ▲ dearer).
 
-## Watchlist
-- Add items with **+**. With a target price you're alerted at or below it; otherwise on a markdown or
-  price drop (5-50%, you choose), or when a discounted OzBargain deal appears.
-- Each item shows a price-history chart (click for the full list). OzBargain posts are community deals
-  and are kept out of the retailer price history.
-- Alerts pop up and can go to ntfy / Discord / Telegram / email (Settings > alerts).
+**Daily deals** - Big-ticket items at least 25% below their normal price. The **category** picker steers the search itself, so choosing *Golf* goes and looks for golf deals rather than just filtering what's already there. **Sort** and **Shuffle** only change the order.
 
-## Sources screen
-Sources > manage sources lists every source with a switch, a status and **the reason** when one fails
-(blocked, bot-check page, needs JavaScript, address not found). Test all offers to switch dead ones off.
+**For you** - Press **Interested** or **Not interested** and suggestions improve. If you press **Find more** several times without reacting, it switches to other categories. **Reset recommended** starts again from scratch.
 
-Shortcuts: Ctrl+L focus search, Ctrl+R check watchlist.  Errors are saved to `deals_error.log`.
+**Sources** - Every shop with a switch, a status and the *reason* it failed if it did. **Test** one shop or all of them.
 
-## Prices
-Prices are read from the shop's own price markup first (price / special-price / old-price), and amounts for
-gift cards, bonuses, delivery, instalments (Zip, Afterpay) and "save $X" are ignored.
+**Look and feel** - A dark, minimal interface with a single emerald accent, a rounded custom window, smooth scrolling and a light theme if you prefer it (sun/moon toggle, top right).
 
-## New in this version
-- **Price history for everything**: every price the app sees is remembered. Cards say "Lowest price seen in N
-  days", or "Was price unverified - never seen higher" when a shop's "was" price looks inflated. Sale seasons
-  (Black Friday, Boxing Day, EOFY) show a reminder to trust that line over the "was" price.
-- **Group stores** (filter bar): the same model at several shops becomes one card, "+3 more stores from $X".
-  Click that line (or right-click > Compare) to see every store, the price gap, and a note when a shop advertises
-  a price-match/beat policy (always check the current terms).
-- **Out of stock / refurbished**: flagged on the card. Out-of-stock items sink to the bottom and are never "deals";
-  "hide refurbished" (on by default) removes refurbished, ex-demo, open-box and grey-import listings.
-- **Best value** sort: well-reviewed and cheap first (turns on review ratings; ratings from the product page,
-  ProductReview.com.au when found, and Reddit).
-- **Watchlist**: Pause/Resume, ignore certain stores per item, and an alert when something is back in stock.
-- **Wrong price?** Right-click a card > report. It's hidden from then on and listed in the exported CSV.
-- **Settings**: cashback % (cards show the price after it), run at startup (starts minimised and checks hourly),
-  export data (CSV), back up / restore the database. Alert passwords go in your system password store if
-  `keyring` is installed.
-- **Windows app (no Python needed)**: download `Deals-Setup.exe` from the [Releases page](https://github.com/M000Nz/Deals/releases/latest) and run it. Your data lives in `%APPDATA%\Deals`. Windows may show a "SmartScreen" warning because the app isn't code-signed yet: click *More info > Run anyway*.
-- **Updating the app**: the installed app checks GitHub Releases, downloads `Deals-Setup.exe`, verifies its SHA-256 checksum and installs it silently, then reopens.
-- **Publishing a release (maintainer)**: raise `ENGINE_VERSION` in `engine.py` and the first line of `Version.txt`, add `note:` lines, commit, then `git tag v26 && git push origin v26`. GitHub Actions (`.github/workflows/release.yml`) builds the exe, self-tests it, builds the installer and publishes the release. `build_exe.bat` is only for local test builds.
-- Help > "fair use and privacy" explains what the app does and its limits.
+### Shortcuts
 
-## Saved searches, compare, and more (v20)
-- **Saved searches**: Save this search as an alert (results page) or + Add on the Watchlist tab. Set a price cap, a minimum star
-  rating and "real discounts only"; every Watchlist check looks for new matches and alerts you once per product.
-- **Compare side by side**: right-click a card > Add to side-by-side comparison (up to 3), then Compare now. Best price,
-  deal score and rating are highlighted. In the store comparison, **Price match** copies a ready-to-send message.
-- **Daily deals and For you** have a **sort** menu: biggest savings, highest deal score, best reviews, biggest % off, price, newest, shuffled.
-- **Watchlist**: sort (closest to target, biggest drop, last checked, name), **folders**, **Import list** (paste names or links),
-  back-in-stock alerts for one store, dashed **target** and **usual price** lines on the graph, a buy / wait hint that knows the
-  Australian sale calendar, and Settings > export Watchlist report (a printable page).
-- **Recently viewed** products appear on the home page.
-- **Weekly source check** (Settings) tests every store in the background and tells you if several have stopped working.
-- **Check for updates** (Help): point it at a text file you host (first line = newest engine version, second = download page).
+| Key | Action |
+|---|---|
+| `Ctrl+K` or `/` | Jump to search |
+| `Ctrl+L` | Focus the search box |
+| `Ctrl+R` | Check the watchlist now |
+| `Ctrl+H` | Back to the home screen |
 
-## Deal score, daily summary, quiet hours
-- **Deal score (0-100)** on every deal card: the real discount, whether it's the lowest price we've seen, reviews, price against
-  other shops and OzBargain votes. Prices that were never higher than today's score low ("was-price unverified"). Sort by it
-  with Sort > Deal score; right-click a card to see why it scored what it did.
-- **Settings > alerts**: choose *instant* or *summary* (one message a day at the hour you pick, with your top Daily deals).
-  Turn on **quiet hours** and deals found overnight are held and sent as one message when they end.
-- **Settings > check all sources** tests every store with a sample search and lists the ones that need a look; for stores that load
-  but return nothing, the page is saved to a `snapshots` folder so a changed layout can be fixed.
-- **Help > run self-check** feeds saved example store pages (the `fixtures` folder) through the price reader and checks the
-  answers. Run `python selftest.py` after any change to the reader.
-- Small extras: a tiny price-history line on cards, an **Undo** bar after hiding a listing or removing a watchlist item,
-  *Copy deal text* in the right-click menu, and shortcuts `/` or Ctrl+K to jump to search.
+---
 
-## Paste a link, spelling help, colour cues
-- **Paste a product link** into the search box. Deals reads the page (brand, model, price), then searches every other store
-  for the same product and tells you if anyone is cheaper, with a Watch this product button.
-- **Spelling is forgiven.** "samsnug galxy", "play station" or "aple airpods" are fixed automatically; the top of the
-  results says what we searched for and offers "Search instead for ..." if we guessed wrong. If a search finds nothing,
-  we retry with a looser spelling fix. Model numbers and -excluded words are never changed.
-- **Colour cues** always come with a symbol so they work for colour-blind users: green ▼ saves/drops and ✓ good,
-  red ▲ price rises and ⚠ poor reviews or inflated "was" prices.
+## FAQ
 
-## Pictures and the reviews button
-- **Missing pictures**: the app now picks the real product photo on each card (skipping logos, badges and
-  placeholder pixels, and choosing the largest size offered), asks image hosts the way a browser would (with the
-  shop as referrer), retries, and if a picture still won't load it uses the product page's own main photo.
-  Cards with no picture show the store name until one arrives.
-- **Reviews button**: the **★** button beside **+** on every picture. Hover it and it checks that product's
-  reviews and tells you what it found ("Reviews: ★ 4.6 (212) · Reddit positive" or "No ratings found - click to
-  search"). Click it for links to the store page, ProductReview.com.au, Reddit and Google. The star turns green
-  or red once reviews are known.
+**Does it cost anything or need an account?** No. There's no account, no API key and no subscription.
+
+**Is my data sent anywhere?** No. Your watchlist, history and settings stay in `%APPDATA%\Deals`. Alert passwords are kept in your system's password store when the optional `keyring` add-on is available.
+
+**Why does a shop show "Bot-check page shown" or "Needs JavaScript"?** Some shops block automated visits. Deals tries a hidden browser for those; shops with serious bot protection can't always be read, and are paused so they don't slow searches. Use **Sources → Test** on one shop, or **Repair**, to retry.
+
+**Why isn't eBay in the results?** It's hidden by default, whether it comes directly or through OzBargain. Add or clear hidden sites in **Settings → hidden sites**.
+
+**A price looks wrong.** Prices are read automatically and can occasionally be wrong - check the shop before you buy. Right-click a card → **report** to hide it for good.
+
+**Something isn't found.** Try the model number, or a simpler name. Deals widens thin searches by itself, and you can add shops under **Sources → add custom**.
+
+**Where are the error logs?** In `%APPDATA%\Deals` (`deals_error.log`, plus `price_check.log` and `image_check.log` for diagnostics).
+
+**Back up or move my data?** **Settings → back up / restore database**. Restoring reopens the app automatically.
+
+---
+
+## Privacy and fair use
+
+Deals is for **personal use**. It reads public pages the way a browser would, one request at a time per site, and stops asking sites that refuse it. Store websites can change or block this at any time, and their terms may restrict automated access - so don't use it to resell data or run it at high volume. Prices and reviews are read automatically: always check the shop before you buy.
+
+---
+
+## For developers
+
+<details>
+<summary><b>Run from source, build and release</b></summary>
+
+### Run from source
+
+Needs Python 3.10+ and the packages in `requirements.txt`.
+
+```bash
+pip install -r requirements.txt
+python DealScraper.pyw        # or double-click start.bat (Windows) / start.command (Mac)
+python selftest.py            # checks the price reader against saved example pages
+```
+
+`DealScraper.pyw`, `engine.py` and `ui_kit.py` must all be the same version and sit in the same folder.
+
+### Project layout
+
+| File | Purpose |
+|---|---|
+| `DealScraper.pyw` | The app: screens, dialogs and window behaviour |
+| `engine.py` | Searching, store handling, price reading, ranking, watchlist, alerts, updates |
+| `ui_kit.py` | Custom widgets, the frameless window and the icon |
+| `selftest.py` + `Fixtures/` | Price-reader checks (also run inside the built exe) |
+| `installer.iss` | Inno Setup installer script |
+| `.github/workflows/release.yml` | Builds, self-tests and publishes releases |
+| `Version.txt` | Newest version plus the release notes shown in the app |
+
+### Publish a release
+
+1. Raise `ENGINE_VERSION` in `engine.py`, and the matching check in `DealScraper.pyw`.
+2. Put the version on the first line of `Version.txt`, the repository URL on the second, then one `note:` line per change.
+3. Commit and push, then run the **release** workflow (Actions → *Run workflow*) with the tag, e.g. `v46`.
+
+The workflow builds the app with PyInstaller, runs `--selftest` on the built exe, builds the installer with Inno Setup and publishes `Deals-Setup.exe` with its `.sha256` to the release. `build_exe.bat` is only for local test builds.
+
+### Adding a shop
+
+Add `("Name", "https://shop.example/search?q={query}")` to `CATALOG` in `engine.py` and the kinds of product it sells to `STORE_CATS`. The shop is then searched only for matching products. Failing shops are paused automatically; **Sources → Repair** looks for a working search address.
+
+### Tuning
+
+`DAILY_MIN_PRICE`, `DAILY_MIN_PCT` and `DAILY_CATS` control Daily deals. `WIDEN_BELOW` sets when a thin search widens to every shop. `POOL_WORKERS` limits how many shops are read at once.
+
+</details>
+
+---
+
+<p align="center"><sub>Deals* - made in Australia, for Australian shoppers.</sub></p>

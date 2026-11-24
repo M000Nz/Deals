@@ -154,7 +154,7 @@ def ensure_deps():
 ensure_deps()
 import engine as E  # noqa: E402
 
-if getattr(E, "ENGINE_VERSION", 0) < 45:
+if getattr(E, "ENGINE_VERSION", 0) < 46:
     _r = tk.Tk()
     _r.withdraw()
     messagebox.showerror("Deals", "engine.py is out of date.\n\nReplace it with the new engine.py from the "
@@ -191,27 +191,34 @@ PALETTES = {
     "dark": dict(bg="#000000", fg="#ffffff", muted="#9a9a9a", line="#262626", border="#383838", hover="#161616",
                  accent="#34d399", accent_fill="#10b981", accent_on="#03140e", alert="#f87171"),
 }
-HOW = ("Type what you want and press enter. Results come from many Australian sources at once: ~50 stores, "
-       "StaticICE (200+ Australian retailers) and OzBargain deals (shown only when the price is discounted, "
-       "with their end times). They're ranked by relevance, so 'watch' shows watches first and bands, straps "
-       "and cases further down.\n\n"
-       "Deals (real discounts: a marked-down price, a discounted OzBargain post, or a price that fell since "
-       "your last check) are listed first; regular prices follow. If nothing is discounted you'll see "
-       "'No current deals found'.\n\n"
-       "Name a brand (apple watch) and only that brand is shown. Use -word to exclude. Listings priced 90% or "
-       "more below the typical price (stickers, cables, parts) are dropped as irrelevant, and sites listed under "
-       "Settings > hidden sites (eBay by default) never appear.\n\n"
-       "Many stores build their pages with JavaScript or block plain requests. Browser mode (Sources > manage "
-       "sources) loads those the way a normal browser would; the app remembers which stores need it. Stores that "
-       "keep failing are paused automatically (retried every day or so) so searches stay quick; 'Test all' "
-       "re-checks everything.\n\n"
-       "Open the Watchlist tab and click + Add item to be alerted when something drops in price, hits your target, or shows up as "
-       "a discounted OzBargain deal. 'limited-time only' shows deals with an end date.\n\n"
-       "Reviews (filter bar): 'Show ratings' adds each product's star rating from its own page and what Reddit "
-       "says about it, so a cheap-looking deal on a poorly reviewed product stands out. 'Hide poor reviews' removes "
-       "products rated under 3.5 stars or that Reddit mostly complains about; 'Only 4 stars and up' keeps just "
-       "the well-reviewed ones. Reddit sometimes refuses automated lookups; the app then uses product-page ratings "
-       "only. Reviews are an extra signal, not a guarantee.")
+HOW = ("SEARCH\n"
+       "Type what you want and press Enter. Deals asks about 180 Australian sources at once - big retailers, "
+       "specialist shops, StaticICE (200+ more shops) and OzBargain - and ranks what comes back. Real discounts "
+       "are listed first, regular prices after. Paste a product link instead and it finds the same product "
+       "everywhere else.\n\n"
+       "Tips: name a brand (apple watch) and only that brand shows. Use -word to leave something out. "
+       "Model numbers are exact (galaxy watch 6 will not show a Watch 5). Spelling mistakes are fixed for you. "
+       "If a search finds very little, Deals automatically widens it to every shop.\n\n"
+       "WATCHLIST\n"
+       "Click + Add item to follow a product. You are alerted when it hits your target price, drops in price "
+       "or turns up as a discounted OzBargain deal. Each item keeps a price history graph; collapse items with "
+       "the arrow to see just the latest change.\n\n"
+       "DAILY DEALS\n"
+       "Big-ticket items that are well below their normal price today. Use category to focus on a hobby "
+       "(golf, cycling, camping, music...) - it searches that category itself, so you get fresh finds, not just "
+       "a filtered list. Sort and Shuffle change the order only.\n\n"
+       "FOR YOU\n"
+       "Deals similar to what you follow. Press Interested or Not interested and the suggestions improve. "
+       "A few outliers are mixed in to keep it fresh, and if you press Find more several times without "
+       "reacting it moves on to other categories. Reset recommended starts again from scratch.\n\n"
+       "SOURCES\n"
+       "Sources > manage sources lists every shop with a status and the reason when one fails. Test one shop "
+       "or all of them. Shops that keep failing are paused automatically so searches stay quick, and Repair "
+       "tries to find a working search address.\n\n"
+       "GOOD TO KNOW\n"
+       "Reviews (filter bar) add star ratings and what Reddit says. Prices are read automatically and can be "
+       "wrong, so check the shop before you buy. Everything stays on your computer. Deals checks for updates "
+       "each time it opens and installs them in one click.")
 
 
 TERMS = ("Deals is for your own personal use. It reads public pages the way a browser would, one request at a time per "
@@ -1080,7 +1087,7 @@ class App(tk.Tk):
         self._err_count = 0
         self.reg_list, self.scrollers = [], {}
         s = E.get_settings(E.db())
-        self.dark = s.get("theme", "light") == "dark"
+        self.dark = s.get("theme", "dark") == "dark"
         self.region = "Australia"
         self.stores_dialog = None
         self.hide_acc = s.get("hide_acc", "0") == "1"
@@ -1304,7 +1311,10 @@ class App(tk.Tk):
         top.pack_propagate(False)
         logo = self.label(top, "Deals", font=self.f_logo, cursor="hand2")
         logo.pack(side="left")
-        logo.bind("<Button-1>", lambda e: self.show_home())
+        star = self.label(top, "*", "accent", font=self.f_logo, cursor="hand2")
+        star.pack(side="left", anchor="n", padx=(2, 0), pady=(2, 0))
+        for w in (logo, star):
+            w.bind("<Button-1>", lambda e: self.show_home())
         tabsrow = self.frame(self)
         tabsrow.pack(fill="x", padx=20, pady=(4, 8))
         tabs = self.frame(tabsrow)
@@ -2665,7 +2675,7 @@ class App(tk.Tk):
                         im.draft("RGB", (self.iw * 2, self.ih * 2))
                     except Exception:  # noqa: BLE001
                         pass
-                    if min(im.size) < 45:                   # a tracking pixel or icon, not a product photo
+                    if min(im.size) < 46:                   # a tracking pixel or icon, not a product photo
                         why.append("too small (placeholder?)")
                         continue
                     return self._prepare(im)

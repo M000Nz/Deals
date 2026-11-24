@@ -1,4 +1,5 @@
-45
+46
 https://github.com/M000Nz/Deals
-note: Daily deals - new Category picker (Tech, Gaming, Golf, Cycling, Camping, Music, Photography and more) that steers the search itself
-note: Picking a category with few saved deals searches for it straight away; Refresh then searches only that category
+note: Dark theme is now the default
+note: Green * added to the Deals logo
+note: Rewritten How it works guide that matches the current app

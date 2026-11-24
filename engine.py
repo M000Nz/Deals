@@ -37,7 +37,7 @@ from urllib.parse import parse_qs, quote, quote_plus, unquote, urlencode, urljoi
 import requests
 from bs4 import BeautifulSoup
 
-ENGINE_VERSION = 45
+ENGINE_VERSION = 46
 GITHUB_REPO = "M000Nz/Deals"
 GITHUB_API = "https://api.github.com"
 FROZEN = bool(getattr(sys, "frozen", False))                  # True when running as the packaged Deals.exe
@@ -364,7 +364,7 @@ def select_stores(stores: list[dict], keywords: str, cfg: dict | None = None) ->
     return keep
 
 
-DEFAULTS = {"region": "Australia", "interval": "60", "currency": "$", "popups": "1", "theme": "light",
+DEFAULTS = {"region": "Australia", "interval": "60", "currency": "$", "popups": "1", "theme": "dark",
             "auto": "0", "hide_acc": "0", "sort": "Best match", "limited": "0", "browser": "1", "blocked": "ebay", "scope": "smart",
             "health_auto": "1", "update_url": "https://raw.githubusercontent.com/M000Nz/Deals/main/Version.txt", "alert_mode": "instant", "quiet_on": "0", "quiet_start": "22", "quiet_end": "7", "summary_hour": "8"}
 ALERT_MIN_SCORE = 50
