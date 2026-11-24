@@ -10,6 +10,7 @@ ui_kit - the app's look and feel.
 from __future__ import annotations
 
 import ctypes
+import ctypes.wintypes
 import math
 import sys
 import time
@@ -251,6 +252,7 @@ class Frameless:
             app.after(40, self._finish)
             self.on = True
             self._grips()
+            app.bind("<Map>", self._mapped, add="+")
             return True
         except Exception:  # noqa: BLE001
             try:
@@ -263,13 +265,19 @@ class Frameless:
     def _finish(self):
         app = self.app
         try:
+            app.attributes("-alpha", 0.0)
             app.deiconify()
             app.update_idletasks()
             self._corners(True)
             self._shadow()
             ctypes.windll.user32.SetForegroundWindow(self.hwnd)
+            self.fade(1.0, 180, start=0.0)
+            app.after(1500, lambda: None if getattr(self, "_min_pending", False) else app.attributes("-alpha", 1.0))
         except Exception:  # noqa: BLE001
-            pass
+            try:
+                app.attributes("-alpha", 1.0)
+            except tk.TclError:
+                pass
 
     def _corners(self, rounded: bool):
         try:                                                  # Windows 11: softly rounded corners (ignored on Windows 10)
@@ -294,20 +302,92 @@ class Frameless:
         widget.bind("<B1-Motion>", self._m, add="+")
         widget.bind("<Double-Button-1>", lambda e: self.toggle_max(), add="+")
 
+    def _cursor(self):
+        pt = ctypes.wintypes.POINT()
+        ctypes.windll.user32.GetCursorPos(ctypes.byref(pt))
+        return pt.x, pt.y
+
+    def _rect(self):
+        r = _RECT()
+        ctypes.windll.user32.GetWindowRect(self.hwnd, ctypes.byref(r))
+        return r.left, r.top, r.right, r.bottom
+
+    def _place(self, x, y, w=None, h=None):
+        """Move / resize with the Windows API directly - far smoother than Tk's geometry() while dragging."""
+        flags = 0x0004 | 0x0010 | (0x0001 if w is None else 0)           # NOZORDER | NOACTIVATE | (NOSIZE)
+        ctypes.windll.user32.SetWindowPos(self.hwnd, 0, int(x), int(y), int(w or 0), int(h or 0), flags)
+
     def _p(self, e):
-        self._drag = (e.x_root - self.app.winfo_x(), e.y_root - self.app.winfo_y())
+        try:
+            cx, cy = self._cursor()
+            l, t, _r, _b = self._rect()
+            self._drag = (cx - l, cy - t)
+        except Exception:  # noqa: BLE001
+            self._drag = (e.x_root - self.app.winfo_x(), e.y_root - self.app.winfo_y())
 
     def _m(self, e):
         if self.maxed or not self._drag:
             return
-        self.app.geometry(f"+{e.x_root - self._drag[0]}+{e.y_root - self._drag[1]}")
+        try:
+            cx, cy = self._cursor()
+            self._place(cx - self._drag[0], cy - self._drag[1])
+        except Exception:  # noqa: BLE001
+            self.app.geometry(f"+{e.x_root - self._drag[0]}+{e.y_root - self._drag[1]}")
+
+    # -- fades (stand-ins for the animations a normal window gets) ----------------
+    def fade(self, to, ms=130, then=None, start=None):
+        app = self.app
+        try:
+            cur = float(app.attributes("-alpha")) if start is None else start
+        except (tk.TclError, ValueError, TypeError):
+            cur = 1.0
+        steps = max(1, ms // 14)
+        self._fade_gen = getattr(self, "_fade_gen", 0) + 1
+        gen = self._fade_gen
+
+        def tick(i=1):
+            if gen != self._fade_gen:
+                return
+            v = cur + (to - cur) * (i / steps)
+            try:
+                app.attributes("-alpha", max(0.0, min(1.0, v)))
+            except tk.TclError:
+                return
+            if i < steps:
+                app.after(14, tick, i + 1)
+            elif then:
+                then()
+        tick()
+
+    def _mapped(self, e):
+        if e.widget is self.app and getattr(self, "_min_pending", False):
+            self._min_pending = False
+            self.fade(1.0, 160, start=0.0)
 
     # -- min / max / close ---------------------------------------------------
     def minimize(self):
+        def go():
+            try:
+                self._min_pending = True
+                ctypes.windll.user32.ShowWindow(self.hwnd, 6)
+                self.app.after(400, self._watch_restore)
+            except Exception:  # noqa: BLE001
+                self._min_pending = False
+                self.app.attributes("-alpha", 1.0)
+        self.fade(0.0, 110, then=go)
+
+    def _watch_restore(self):
+        """Fade back in once the window has been restored from the taskbar."""
+        if not getattr(self, "_min_pending", False):
+            return
         try:
-            ctypes.windll.user32.ShowWindow(self.hwnd, 6)
+            if ctypes.windll.user32.IsIconic(self.hwnd):
+                self.app.after(200, self._watch_restore)
+                return
         except Exception:  # noqa: BLE001
             pass
+        self._min_pending = False
+        self.fade(1.0, 170, start=0.0)
 
     def toggle_max(self):
         app = self.app
@@ -364,14 +444,23 @@ class Frameless:
                 pass
 
     def _rp(self, e, side):
-        a = self.app
-        self._rs = (side, e.x_root, e.y_root, a.winfo_x(), a.winfo_y(), a.winfo_width(), a.winfo_height())
+        try:
+            cx, cy = self._cursor()
+            l, t, r, b = self._rect()
+            self._rs = (side, cx, cy, l, t, r - l, b - t)
+        except Exception:  # noqa: BLE001
+            a = self.app
+            self._rs = (side, e.x_root, e.y_root, a.winfo_x(), a.winfo_y(), a.winfo_width(), a.winfo_height())
 
     def _rm(self, e):
         if not self._rs or self.maxed:
             return
         side, x0, y0, wx, wy, ww, wh = self._rs
-        dx, dy = e.x_root - x0, e.y_root - y0
+        try:
+            cx, cy = self._cursor()
+        except Exception:  # noqa: BLE001
+            cx, cy = e.x_root, e.y_root
+        dx, dy = cx - x0, cy - y0
         mw, mh = self.app.minsize()
         x, y, w, h = wx, wy, ww, wh
         if "e" in side:
@@ -384,7 +473,10 @@ class Frameless:
         if "n" in side:
             h = max(mh, wh - dy)
             y = wy + (wh - h)
-        self.app.geometry(f"{w}x{h}+{x}+{y}")
+        try:
+            self._place(x, y, w, h)
+        except Exception:  # noqa: BLE001
+            self.app.geometry(f"{w}x{h}+{x}+{y}")
 
 
 def cap(t):
@@ -968,6 +1060,8 @@ class ScrollFrame:
         app.scrollers[str(self.canvas)] = self
 
     def _resize(self, e):
+        if e.width < px(300):                      # a minimised window reports a tiny size: don't re-lay-out everything for it
+            return
         self.canvas.itemconfigure(self.win, width=e.width)
         if self.on_width:
             self.on_width(e.width)

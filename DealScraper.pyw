@@ -154,7 +154,7 @@ def ensure_deps():
 ensure_deps()
 import engine as E  # noqa: E402
 
-if getattr(E, "ENGINE_VERSION", 0) < 35:
+if getattr(E, "ENGINE_VERSION", 0) < 36:
     _r = tk.Tk()
     _r.withdraw()
     messagebox.showerror("Deals", "engine.py is out of date.\n\nReplace it with the new engine.py from the "
@@ -1294,8 +1294,9 @@ class App(tk.Tk):
         self.search_var = tk.StringVar()
         titlebar = self.frame(self)
         titlebar.pack(fill="x")
-        top = self.frame(titlebar)
-        top.pack(fill="x", padx=(20, 0), pady=(10, 0))
+        top = self.frame(titlebar, height=50)
+        top.pack(fill="x", padx=(20, 0), pady=(8, 0))
+        top.pack_propagate(False)
         logo = self.label(top, "Deals", font=self.f_logo, cursor="hand2")
         logo.pack(side="left")
         logo.bind("<Button-1>", lambda e: self.show_home())
@@ -1317,12 +1318,12 @@ class App(tk.Tk):
 
         if self.wants_frameless:                                    # our own minimise / maximise / close
             wb = self.frame(top)
-            wb.pack(side="right", anchor="n")
-            for glyph, cmd, danger in (("\u2715", self.on_close, True), ("\u25a1", self.chrome.toggle_max, False),
-                                       ("\u2013", self.chrome.minimize, False)):
-                self.win_button(wb, glyph, cmd, danger).pack(side="right")
+            wb.pack(side="right", fill="y")
+            for glyph, cmd, danger in (("close", self.close_clicked, True), ("max", self.chrome.toggle_max, False),
+                                       ("min", self.chrome.minimize, False)):
+                self.win_button(wb, glyph, cmd, danger).pack(side="right", fill="y")
         self.theme_sw = self.reg(ui.ThemeToggle(self, top, self.dark, self.set_dark, self.tab_btn["search"].bh), "switch")
-        self.theme_sw.pack(side="right", padx=(0, 14), pady=(4, 0))
+        self.theme_sw.pack(side="right", padx=(8, 14))
         menus = [
             ("Sources", [("manage sources...", lambda: StoresDialog(self)), ("test all sources", lambda: self.test_stores()),
                          ("add custom store...", lambda: self.add_store()), ("repair broken sources", self.run_repair), None,
@@ -1343,7 +1344,7 @@ class App(tk.Tk):
                       ("about", lambda: messagebox.showinfo("About", f"Deals  -  version {E.ENGINE_VERSION}\nAustralian deal finder."))]),
         ]
         for i, (name, items) in enumerate(reversed(menus)):
-            Pop(self, top, name, items, pad=(10, 4), style="ghost").pack(side="right", padx=(0, 2 if i else 8), pady=(4, 0))
+            Pop(self, top, name, items, pad=(11, 5), style="ghost").pack(side="right", padx=(0, 2))
         if self.wants_frameless:                                    # drag the window by its empty top area
             for w in (titlebar, top, tabsrow):
                 self.chrome.drag_handle(w)
@@ -1441,10 +1442,13 @@ class App(tk.Tk):
             self.load_sub.configure(text=f"{done} of {total} sources checked")
             self.load_bar.set(done / total)
 
-    def win_button(self, parent, glyph, cmd, danger=False):
-        """A minimise / maximise / close button for the custom window frame."""
-        P = self.P
-        lab = tk.Label(parent, text=glyph, font=(self.f_norm[0], 11), bd=0, padx=px(17), pady=px(5), cursor="arrow")
+    def win_button(self, parent, kind, cmd, danger=False):
+        """A minimise / maximise / close button for the custom window frame (Windows' own icon font when available)."""
+        fams = set(tkfont.families())
+        icon = "Segoe Fluent Icons" if "Segoe Fluent Icons" in fams else ("Segoe MDL2 Assets" if "Segoe MDL2 Assets" in fams else None)
+        glyphs = {"min": ("\ue921", "\u2013"), "max": ("\ue922", "\u25a1"), "close": ("\ue8bb", "\u2715")}[kind]
+        lab = tk.Label(parent, text=glyphs[0] if icon else glyphs[1], font=(icon, 9) if icon else (self.f_norm[0], 11),
+                       bd=0, padx=px(18), cursor="arrow")
         self.reg(lab, "text")
 
         def on(e):
@@ -1456,6 +1460,12 @@ class App(tk.Tk):
         lab.bind("<Leave>", off)
         lab.bind("<Button-1>", lambda e: cmd())
         return lab
+
+    def close_clicked(self):
+        if self.chrome.on:
+            self.chrome.fade(0.0, 120, then=self.on_close)
+        else:
+            self.on_close()
 
     def toggle_frame(self):
         on = E.get_settings(E.db()).get("classic_frame", "0") != "1"

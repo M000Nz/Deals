@@ -1,5 +1,5 @@
-35
+36
 https://github.com/M000Nz/Deals
-note: New modern look - a rounded, borderless window with a large Deals title top-left, with Search / Watchlist / Daily deals / For you tabs directly under it
-note: Custom minimise, maximise and close buttons, drag to move and resize from the edges
-note: Settings > window style switches back to the classic Windows frame if you prefer it (also a Start menu shortcut)
+note: Tidier top-right corner - menus, theme switch and window buttons now line up
+note: Fade animations when opening, minimising, restoring and closing
+note: Smoother window dragging and resizing, and no more stutter when restoring from minimised
