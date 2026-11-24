@@ -1,4 +1,4 @@
-39
+40
 https://github.com/M000Nz/Deals
-note: 69 new sources (184 total) - price comparison (Getprice), more tech, electronics, home and furniture, outdoor, cycling, fashion, supplements, music, books and more
-note: Shops that do not work are switched off automatically, and Sources > Repair can fix their search addresses
+note: Watchlist - collapse or expand each item with its arrow, or all at once with Collapse all / Expand all (remembered)
+note: Watchlist graphs now line up in the same place on every item

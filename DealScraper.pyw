@@ -154,7 +154,7 @@ def ensure_deps():
 ensure_deps()
 import engine as E  # noqa: E402
 
-if getattr(E, "ENGINE_VERSION", 0) < 39:
+if getattr(E, "ENGINE_VERSION", 0) < 40:
     _r = tk.Tk()
     _r.withdraw()
     messagebox.showerror("Deals", "engine.py is out of date.\n\nReplace it with the new engine.py from the "
@@ -1403,6 +1403,7 @@ class App(tk.Tk):
         self.watch_sort = E.get_settings(E.db()).get("watch_sort") or "Added"
         if self.watch_sort not in WATCH_SORTS:
             self.watch_sort = "Added"
+        self.watch_folded = {int(x) for x in (E.get_settings(E.db()).get("watch_folded") or "").split(",") if x.strip().isdigit()}
         self.daily.on_width = lambda w: self.on_pick_width("daily", w)
         self.foryou.on_width = lambda w: self.on_pick_width("foryou", w)
         self.build_home()
@@ -2722,6 +2723,11 @@ class App(tk.Tk):
                       lambda: next((k for k, v in AUTO.items() if v == self.auto_minutes), "Off"),
                       self.set_auto).pack(side="right", padx=(0, 8))
         self.button(hdr, "Check now", self.start_check, pad=(14, 5)).pack(side="right", padx=(0, 8))
+        all_folded = bool(items) and all(r["id"] in self.watch_folded for r in items)
+        if items:
+            self.button(hdr, "Expand all" if all_folded else "Collapse all",
+                        lambda: self.fold_watch([r["id"] for r in items], not all_folded),
+                        pad=(14, 5), style="ghost").pack(side="right", padx=(0, 8))
         last = con.execute("SELECT MAX(checked_at) FROM watchlist").fetchone()[0]
         self.label(inner, f"Last checked {fmt_time(last)}" if last else "Not checked yet", "muted",
                    font=self.f_small).pack(anchor="w", padx=26, pady=(0, 6))
@@ -2797,6 +2803,13 @@ class App(tk.Tk):
             for w in (row, price, mid, t1, t2, t3):
                 w.bind("<Button-1>", lambda e, u=r["url"]: self.open_url(u))
                 w.configure(cursor="hand2")
+
+    def fold_watch(self, ids, fold, render=True):
+        for i in ids:
+            (self.watch_folded.add if fold else self.watch_folded.discard)(i)
+        E.set_setting(E.db(), "watch_folded", ",".join(str(i) for i in sorted(self.watch_folded)))
+        if render:
+            self.render_watch()
 
     def sorted_items(self, con, items):
         mode = self.watch_sort
@@ -2894,11 +2907,32 @@ class App(tk.Tk):
         self.frame(parent, "line", height=1).pack(fill="x", padx=26, pady=(12, 0))
         row = self.frame(parent)
         row.pack(fill="x", padx=26, pady=12)
+        folded = r["id"] in self.watch_folded
+        if folded:
+            arrow = self.label(row, "\u25b8", "muted", font=self.f_bold, cursor="hand2", width=2)
+            arrow.pack(side="left")
+            name = self.label(row, r["keywords"], font=self.f_bold, cursor="hand2")
+            name.pack(side="left")
+            if r["best_price"] is not None:
+                self.label(row, f"   {E.money(sym, r['best_price'])}  \u00b7  {r['best_store']}", "muted",
+                           font=self.f_small).pack(side="left")
+            if r["max_price"] is not None and r["best_price"] is not None and r["best_price"] <= r["max_price"]:
+                self.label(row, "   \u2605 at target", "accent", font=self.f_small_b).pack(side="left")
+            for w in (arrow, name):
+                w.bind("<Button-1>", lambda e, i=r["id"]: self.fold_watch([i], False))
+            return
+        row.columnconfigure(0, minsize=290)         # fixed columns so every graph lines up the same
         row.columnconfigure(1, weight=1)
+        row.columnconfigure(2, minsize=110)
         left = self.frame(row)
         left.grid(row=0, column=0, sticky="nw", padx=(0, 22))
-        kw = self.label(left, r["keywords"], font=self.f_bold, wraplength=240, justify="left", cursor="hand2")
-        kw.pack(anchor="w")
+        head = self.frame(left)
+        head.pack(anchor="w")
+        arrow = self.label(head, "\u25be", "muted", font=self.f_bold, cursor="hand2", width=2)
+        arrow.pack(side="left", anchor="n")
+        arrow.bind("<Button-1>", lambda e, i=r["id"]: self.fold_watch([i], True))
+        kw = self.label(head, r["keywords"], font=self.f_bold, wraplength=240, justify="left", cursor="hand2")
+        kw.pack(side="left")
         hit = r["max_price"] is not None and r["best_price"] is not None and r["best_price"] <= r["max_price"]
         trig = (f"Target {E.money(sym, r['max_price'])}" if r["max_price"] is not None
                 else f"Any {r['min_drop_pct']:g}%+ sale or drop")
