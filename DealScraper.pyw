@@ -154,7 +154,7 @@ def ensure_deps():
 ensure_deps()
 import engine as E  # noqa: E402
 
-if getattr(E, "ENGINE_VERSION", 0) < 41:
+if getattr(E, "ENGINE_VERSION", 0) < 42:
     _r = tk.Tk()
     _r.withdraw()
     messagebox.showerror("Deals", "engine.py is out of date.\n\nReplace it with the new engine.py from the "
@@ -572,8 +572,13 @@ class StoresDialog(tk.Toplevel):
                 x = app.label(row, "\u00d7", "muted", cursor="hand2")
                 x.bind("<Button-1>", lambda e, i=r["id"]: self.delete(i))
                 x.pack(side="right")
+            app.button(row, "Test", lambda i=r["id"]: self.test_one(i), pad=(10, 2), style="ghost",
+                       font=app.f_small).pack(side="right")
             app.label(row, f"{mark} {st}", "muted", font=app.f_small).pack(side="right", padx=8)
             app.frame(self.sf.inner, "line", height=1).pack(fill="x", padx=12)
+
+    def test_one(self, i):
+        self.app.test_store_one(i, self.refresh)
 
     def set_enabled(self, i, on):
         con = E.db()
@@ -2638,7 +2643,7 @@ class App(tk.Tk):
                         im.draft("RGB", (self.iw * 2, self.ih * 2))
                     except Exception:  # noqa: BLE001
                         pass
-                    if min(im.size) < 41:                   # a tracking pixel or icon, not a product photo
+                    if min(im.size) < 42:                   # a tracking pixel or icon, not a product photo
                         why.append("too small (placeholder?)")
                         continue
                     return self._prepare(im)
@@ -3214,6 +3219,39 @@ class App(tk.Tk):
                 E.record_health(c, s["id"], ok)
             c.commit()
             self.q.put(lambda: self.tests_done(results, done))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def test_store_one(self, store_id, done=None):
+        """Test a single shop with a sample search that suits what it sells."""
+        con = E.db()
+        row = con.execute("SELECT * FROM stores WHERE id=?", (store_id,)).fetchone()
+        if not row:
+            return
+        store, cfg = dict(row), E.get_settings(con)
+        cfg["region"] = cfg.get("region") or self.region
+        con.execute("UPDATE stores SET status='Testing...' WHERE id=?", (store_id,))
+        con.commit()
+        if done:
+            done()
+        self.set_status(f"testing {store['name']}...")
+
+        def work():
+            status, ok = E.test_store(store, cfg=cfg)
+            c = E.db()
+            c.execute("UPDATE stores SET status=?, tested_at=? WHERE id=?", (status, time.time(), store_id))
+            c.execute("UPDATE stores SET fail_streak=0, skip_until=0 WHERE id=?", (store_id,))
+            if ok:
+                c.execute("UPDATE stores SET enabled=1 WHERE id=?", (store_id,))     # it works: make sure it is on
+            else:
+                E.record_health(c, store_id, False)
+            c.commit()
+
+            def finish():
+                self.set_status(f"{store['name']}: {status}")
+                if done:
+                    done()
+            self.q.put(finish)
 
         threading.Thread(target=work, daemon=True).start()
 

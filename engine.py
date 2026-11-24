@@ -37,7 +37,7 @@ from urllib.parse import parse_qs, quote, quote_plus, unquote, urlencode, urljoi
 import requests
 from bs4 import BeautifulSoup
 
-ENGINE_VERSION = 41
+ENGINE_VERSION = 42
 GITHUB_REPO = "M000Nz/Deals"
 GITHUB_API = "https://api.github.com"
 FROZEN = bool(getattr(sys, "frozen", False))                  # True when running as the packaged Deals.exe
@@ -2249,7 +2249,22 @@ def find_offers(keywords: str, stores: list[dict], cfg: dict | None = None, work
     return find_offers_many([("q", keywords)], stores, cfg, progress, deadline)["q"]
 
 
-def test_store(store: dict, query: str = "laptop", cfg: dict | None = None) -> tuple[str, bool]:
+SAMPLE_QUERY = {"tech": "laptop", "gaming": "controller", "home": "kettle", "diy": "drill", "garden": "mower",
+                "fashion": "shoes", "sports": "running shoes", "outdoor": "tent", "baby": "stroller", "toys": "lego",
+                "pets": "dog food", "beauty": "shampoo", "auto": "wiper blades", "books": "cookbook",
+                "grocery": "coffee", "office": "pen", "music": "guitar"}
+
+
+def sample_query(store: dict) -> str:
+    """A search the shop is sure to have results for, so a test says something about the shop, not the query."""
+    for c in (store.get("cats") or "").split():
+        if c in SAMPLE_QUERY:
+            return SAMPLE_QUERY[c]
+    return "laptop"
+
+
+def test_store(store: dict, query: str | None = None, cfg: dict | None = None) -> tuple[str, bool]:
+    query = query or sample_query(store)
     try:
         n = len(scrape_store(store, query, cfg, query))
         return status_text(n, None, bool(store.get("_browser_used"))), n > 0

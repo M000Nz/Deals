@@ -1,4 +1,4 @@
-41
+42
 https://github.com/M000Nz/Deals
-note: Daily deals / For you keep searching in the background when you switch tabs
-note: Starting a new search now takes over a running Daily deals scan instead of asking you to wait
+note: Sources - every shop now has its own Test button, so you can check just one
+note: Tests use a sample search that suits the shop (e.g. dog food for pet shops) so they no longer fail for the wrong reason
