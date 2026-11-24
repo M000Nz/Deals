@@ -277,7 +277,12 @@ SECRET_KEYS = {"discord", "tg_token", "email_pass"}
 def db() -> sqlite3.Connection:
     con = sqlite3.connect(DB_PATH, timeout=30)
     con.row_factory = sqlite3.Row
-    con.executescript(
+    con.executescript(_SCHEMA)
+    _repair_after_schema(con)
+    return _finish_db(con)
+
+
+_SCHEMA = (
         """
         CREATE TABLE IF NOT EXISTS watchlist(
             id INTEGER PRIMARY KEY, keywords TEXT NOT NULL,
@@ -312,7 +317,51 @@ def db() -> sqlite3.Connection:
         CREATE TABLE IF NOT EXISTS feedback(
             url TEXT PRIMARY KEY, verdict TEXT NOT NULL, terms TEXT, title TEXT, at REAL);
         """
-    )
+)
+
+
+def _repair_after_schema(con):
+    """Databases from much older versions can have tables with missing columns (CREATE IF NOT EXISTS leaves them alone).
+    Add what's missing; a stores table too old to use is set aside and rebuilt (the built-in stores are re-added)."""
+    ref = sqlite3.connect(":memory:")
+    ref.executescript(_SCHEMA)
+    ref.execute("CREATE TABLE IF NOT EXISTS stores(id INTEGER PRIMARY KEY, name TEXT NOT NULL, region TEXT NOT NULL, "
+                "search_url TEXT NOT NULL, item TEXT, title TEXT, price TEXT, was_price TEXT, link TEXT, "
+                "enabled INTEGER DEFAULT 1, status TEXT DEFAULT 'Not tested', tested_at REAL, custom INTEGER DEFAULT 0, "
+                "UNIQUE(name, region))")
+    changed = False
+    for (tname,) in ref.execute("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").fetchall():
+        have = {r[1] for r in con.execute(f"PRAGMA table_info({tname})")}
+        want = ref.execute(f"PRAGMA table_info({tname})").fetchall()
+        missing = [r for r in want if r[1] not in have]
+        if not missing:
+            continue
+        if not changed:
+            changed = True
+            try:                                                   # keep a copy of the untouched file, just in case
+                import shutil
+                shutil.copy2(DB_PATH, str(DB_PATH) + ".before-repair")
+            except OSError:
+                pass
+        if tname == "stores" and any(r[1] in ("name", "region", "search_url") for r in missing):
+            con.execute(f"ALTER TABLE stores RENAME TO stores_old_{int(time.time())}")
+            con.executescript(_SCHEMA)
+            con.execute("CREATE TABLE IF NOT EXISTS stores(id INTEGER PRIMARY KEY, name TEXT NOT NULL, region TEXT NOT NULL, "
+                        "search_url TEXT NOT NULL, item TEXT, title TEXT, price TEXT, was_price TEXT, link TEXT, "
+                        "enabled INTEGER DEFAULT 1, status TEXT DEFAULT 'Not tested', tested_at REAL, custom INTEGER DEFAULT 0, "
+                        "UNIQUE(name, region))")
+            continue
+        for _cid, col, typ, _nn, dflt, _pk in missing:
+            ddl = f"ALTER TABLE {tname} ADD COLUMN {col} {typ or ''}" + (f" DEFAULT {dflt}" if dflt is not None else "")
+            try:
+                con.execute(ddl)
+            except sqlite3.OperationalError:
+                pass
+    con.commit()
+    ref.close()
+
+
+def _finish_db(con):
     wcols = [r[1] for r in con.execute("PRAGMA table_info(watchlist)")]
     for col, ddl in (("paused", "INTEGER DEFAULT 0"), ("ignore_stores", "TEXT DEFAULT ''"),
                      ("want_stock", "INTEGER DEFAULT 0"), ("had_stock", "INTEGER DEFAULT 1"),
