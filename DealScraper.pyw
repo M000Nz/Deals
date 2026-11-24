@@ -97,7 +97,7 @@ def ensure_deps():
 ensure_deps()
 import engine as E  # noqa: E402
 
-if getattr(E, "ENGINE_VERSION", 0) < 21:
+if getattr(E, "ENGINE_VERSION", 0) < 22:
     _r = tk.Tk()
     _r.withdraw()
     messagebox.showerror("Deals", "engine.py is out of date.\n\nReplace it with the new engine.py from the "
@@ -1097,7 +1097,7 @@ class App(tk.Tk):
                       ("fair use and privacy", lambda: messagebox.showinfo("Fair use and privacy", TERMS)),
                       ("open error log", self.open_error_log), ("run self-check", self.run_selftest),
                       ("check for updates...", self.check_updates),
-                      ("about", lambda: messagebox.showinfo("About", "Deals\nAustralian deal finder."))]),
+                      ("about", lambda: messagebox.showinfo("About", f"Deals  -  version {E.ENGINE_VERSION}\nAustralian deal finder."))]),
         ]
         for i, (name, items) in enumerate(reversed(menus)):
             Pop(self, top, name, items, pad=(10, 4), style="ghost").pack(side="right", padx=(0, 14 if i == 0 else 2))
@@ -2971,6 +2971,8 @@ class App(tk.Tk):
             E.set_setting(con, "update_url", url)
         if not url:
             return
+        if not silent:
+            self.set_status(f"checking for updates...  (you have version {E.ENGINE_VERSION})")
 
         def work():
             latest, link = E.check_update(url)
@@ -2979,12 +2981,19 @@ class App(tk.Tk):
 
     def update_result(self, latest, link, silent):
         if latest is None:
-            return None if silent else messagebox.showinfo("updates", "Couldn't read that update address.")
+            self.set_status("ready")
+            return None if silent else messagebox.showinfo(
+                "updates", f"Couldn't read that update address.\n\nYou have version {E.ENGINE_VERSION}.")
+        self.set_status("ready")
         if latest > E.ENGINE_VERSION:
-            self.toast(f"A newer version of Deals is available (v{latest})",
+            self.toast(f"Update available: version {latest}  (you have {E.ENGINE_VERSION})",
                        (lambda: self.open_url(link)) if link else None, secs=15, label="Download")
+            if not silent:
+                messagebox.showinfo("updates", f"A newer version is available.\n\nYou have: version {E.ENGINE_VERSION}\n"
+                                    f"Newest: version {latest}")
         elif not silent:
-            messagebox.showinfo("updates", "You have the newest version.")
+            messagebox.showinfo("updates", f"You have the newest version.\n\nYou have: version {E.ENGINE_VERSION}\n"
+                                f"Newest: version {latest}")
 
     def maybe_health(self):
         """About once a week, quietly test every source and say so if some have stopped working."""

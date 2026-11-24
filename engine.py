@@ -36,7 +36,7 @@ from urllib.parse import parse_qs, quote_plus, urlencode, urljoin, urlparse
 import requests
 from bs4 import BeautifulSoup
 
-ENGINE_VERSION = 21
+ENGINE_VERSION = 22
 DB_PATH = Path(__file__).parent / "dealscraper.db"
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
