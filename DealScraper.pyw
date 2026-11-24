@@ -124,7 +124,7 @@ def ensure_deps():
 ensure_deps()
 import engine as E  # noqa: E402
 
-if getattr(E, "ENGINE_VERSION", 0) < 28:
+if getattr(E, "ENGINE_VERSION", 0) < 29:
     _r = tk.Tk()
     _r.withdraw()
     messagebox.showerror("Deals", "engine.py is out of date.\n\nReplace it with the new engine.py from the "
@@ -560,8 +560,28 @@ class Card(tk.Canvas):
             self.app.open_url(self.o.url)
 
     def _hover(self, on):
+        """Highlight the border. Only the border picture is swapped - a full redraw on every Enter/Leave is what made
+        scrolling flicker as cards slid under the pointer."""
+        if on == self.hover:
+            return
         self.hover = on
-        self.redraw()
+        if on and time.perf_counter() < getattr(self.app, "scroll_until", 0):
+            self.hover = False                                    # cards are moving under a still pointer: ignore
+            return
+        frame = getattr(self, "_frame", None)
+        if frame is None:
+            return self.redraw()
+        P = self.app.P
+        try:
+            if ui.can_aa():
+                ph = ui.aa_rrect(int(self.app.cw), int(self.h), int(px(14)), P["bg"], P["fg"] if on else P["border"],
+                                 max(1, px(1)), P["bg"])
+                self._keep.append(ph)
+                self.itemconfigure(frame, image=ph)
+            else:
+                self.itemconfigure(frame, outline=P["fg"] if on else P["border"])
+        except tk.TclError:
+            pass
 
     def _leave(self):
         self.tip_kind = None
@@ -592,8 +612,8 @@ class Card(tk.Canvas):
         self.delete("all")
         self.tip_kind = None
         self._keep = []
-        draw_rrect(self, 0, 0, cw, self.h, px(14), P["bg"], P["fg"] if self.hover else P["border"],
-                   max(1, px(1)), P["bg"])
+        self._frame = draw_rrect(self, 0, 0, cw, self.h, px(14), P["bg"], P["fg"] if self.hover else P["border"],
+                                 max(1, px(1)), P["bg"])
         self._has_pic = self.photo is not None
         if self.photo is not None:
             self._keep.append(self.photo)
@@ -1180,6 +1200,7 @@ class App(tk.Tk):
         self.pick_sorts = {"daily": "Biggest savings", "foryou": "Newest"}
         self.cmp = []                                                    # products chosen for side-by-side compare
         self._update_ov, self._updating = None, False
+        self.scroll_until = 0.0
         self.watch_sort = E.get_settings(E.db()).get("watch_sort") or "Added"
         if self.watch_sort not in WATCH_SORTS:
             self.watch_sort = "Added"
@@ -2349,30 +2370,46 @@ class App(tk.Tk):
                 self.pool.submit(self._fetch_thumb, u, self.thumb_pages.get(u))
 
     def _load_image(self, url, page):
-        """Download and prepare one picture. Tries with the shop as referrer (many image hosts insist on it), then without."""
+        """Download and prepare one picture. Tries with the shop as referrer (many image hosts insist on it), then without,
+        then the real picture behind an image-resizer link."""
         heads = []
         if page:
             p = E.urlparse(page)
             heads.append({"User-Agent": E.UA, "Referer": f"{p.scheme}://{p.netloc}/"})
         heads.append({"User-Agent": E.UA})
         heads.append({"User-Agent": E.UA_ALT})
-        for h in heads:
-            h["Accept"] = "image/webp,image/jpeg,image/png,image/*;q=0.8,*/*;q=0.5"
-            try:
-                r = E.requests.get(url, headers=h, timeout=(5, 10))
-                if r.status_code != 200 or len(r.content) < 200:
+        why = []
+        for u in [url] + E.image_alternatives(url):
+            for h in heads:
+                h["Accept"] = "image/webp,image/jpeg,image/png,image/*;q=0.8,*/*;q=0.5"
+                try:
+                    r = E.requests.get(u, headers=h, timeout=(5, 10))
+                    if r.status_code != 200 or len(r.content) < 200:
+                        why.append(f"HTTP {r.status_code}, {len(r.content)} bytes")
+                        continue
+                    im = Image.open(io.BytesIO(r.content))
+                    try:                                    # JPEGs decode at reduced size: far less CPU than full resolution
+                        im.draft("RGB", (self.iw * 2, self.ih * 2))
+                    except Exception:  # noqa: BLE001
+                        pass
+                    if min(im.size) < 40:                   # a tracking pixel or icon, not a product photo
+                        why.append("too small (placeholder?)")
+                        continue
+                    return self._prepare(im)
+                except Exception as e:  # noqa: BLE001
+                    why.append(f"{type(e).__name__}: {str(e)[:60]}")
                     continue
-                im = Image.open(io.BytesIO(r.content))
-                try:                                        # JPEGs decode at reduced size: far less CPU than full resolution
-                    im.draft("RGB", (self.iw * 2, self.ih * 2))
-                except Exception:  # noqa: BLE001
-                    pass
-                if min(im.size) < 40:                       # a tracking pixel or icon, not a product photo
-                    continue
-                return self._prepare(im)
-            except Exception:  # noqa: BLE001
-                continue
+        self._note_image_failure(url, why)
         return None
+
+    def _note_image_failure(self, url, why):
+        """Keep the last few picture failures in image_check.log (Help > open error log folder) so they can be diagnosed."""
+        try:
+            self._img_fail = (getattr(self, "_img_fail", []) + [f"{url[:150]}  ->  {', '.join(dict.fromkeys(why))[:200]}"])[-40:]
+            with open(os.path.join(DATA_HOME, "image_check.log"), "w", encoding="utf-8") as f:
+                f.write("Pictures that couldn't be loaded (newest last):\n" + "\n".join(self._img_fail))
+        except OSError:
+            pass
 
     def _prepare(self, im):
         if im.mode in ("RGBA", "LA", "P"):

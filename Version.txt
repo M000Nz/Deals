@@ -1,4 +1,4 @@
-28
+29
 https://github.com/M000Nz/Deals
-note: For you has a Reset recommended button - it clears what it learned and shows random popular deals until you press Interested or add to your Watchlist
-note: JB Hi-Fi price check now falls back to the browser and keeps a small price_check.log
+note: Smoother scrolling - cards no longer flicker or go blank as they slide under the pointer
+note: Better picture loading (resizer links, CSS background pictures) and an image_check.log for pictures that still fail

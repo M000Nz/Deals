@@ -32,12 +32,12 @@ from datetime import datetime
 from email.message import EmailMessage
 from email.utils import parsedate_to_datetime
 from pathlib import Path
-from urllib.parse import parse_qs, quote, quote_plus, urlencode, urljoin, urlparse
+from urllib.parse import parse_qs, quote, quote_plus, unquote, urlencode, urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup
 
-ENGINE_VERSION = 28
+ENGINE_VERSION = 29
 GITHUB_REPO = "M000Nz/Deals"
 GITHUB_API = "https://api.github.com"
 FROZEN = bool(getattr(sys, "frozen", False))                  # True when running as the packaged Deals.exe
@@ -1003,6 +1003,28 @@ def _img_url(img, base: str) -> str | None:
     return None
 
 
+_BG_URL = re.compile(r"""url\(\s*['"]?([^'")]+)""", re.I)
+
+
+def image_alternatives(url: str) -> list[str]:
+    """Other addresses worth trying if `url` won't load: the real picture behind an image-resizer link
+    (/_next/image?url=..., ?url=..., ?src=...), then the same address without resizing parameters."""
+    out = []
+    try:
+        pu = urlparse(url)
+        qs = parse_qs(pu.query)
+        for k in ("url", "src", "image", "img", "source"):
+            if qs.get(k):
+                inner = unquote(qs[k][0])
+                out.append(urljoin(url, inner))
+                break
+        if pu.query and not out:
+            out.append(url.split("?")[0])
+    except ValueError:
+        pass
+    return [u for u in out if u and u != url]
+
+
 def _card_image(a, node, base: str) -> str | None:
     """The product photo for a card: skips logos, badges, rating stars and placeholder pixels."""
     seen = set()
@@ -1015,6 +1037,13 @@ def _card_image(a, node, base: str) -> str | None:
             u = _img_url(img, base)
             if u and not _NOT_PRODUCT.search(hint) and not _NOT_PRODUCT.search(u.rsplit("/", 1)[-1]):
                 return u
+    for scope in (a, node):                                           # no <img>: a picture set as a CSS background
+        for el in scope.find_all(style=True, limit=12):
+            m = _BG_URL.search(el.get("style") or "")
+            if m and not m.group(1).startswith("data:"):
+                u = urljoin(base, _html.unescape(m.group(1)))
+                if not u.lower().split("?")[0].endswith(".svg") and not _NOT_PHOTO.search(u):
+                    return u
     return None
 
 

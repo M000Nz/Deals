@@ -12,6 +12,7 @@ from __future__ import annotations
 import ctypes
 import math
 import sys
+import time
 import tkinter as tk
 from tkinter import font as tkfont
 
@@ -624,7 +625,7 @@ class ScrollFrame:
         self.inner.bind("<Configure>", lambda e: self.canvas.configure(scrollregion=self.canvas.bbox("all")))
         self.canvas.bind("<Configure>", self._resize)
         self.on_width = None
-        self._target, self._animating = 0.0, False
+        self._target, self._animating, self._last = 0.0, False, 0.0
         app.scrollers[str(self.canvas)] = self
 
     def _resize(self, e):
@@ -654,11 +655,12 @@ class ScrollFrame:
         if total <= 0 or room <= 0:
             return
         self._tot = total                      # measured once per wheel click, not on every animation frame
+        self.app.scroll_until = time.perf_counter() + 0.35     # cards ignore hover while the page is moving
         if not self._animating:
             self._target = self.canvas.yview()[0] * total
         self._target = min(room, max(0.0, self._target + d * px(90)))
         if not self._animating:
-            self._animating = True
+            self._animating, self._last = True, time.perf_counter()
             self._tick()
 
     def _tick(self):
@@ -666,6 +668,9 @@ class ScrollFrame:
         if total <= 0:
             self._animating = False
             return
+        now = time.perf_counter()
+        dt, self._last = min(0.1, now - self._last), now
+        self.app.scroll_until = now + 0.35
         cur = self.canvas.yview()[0] * total
         diff = self._target - cur
         try:
@@ -673,8 +678,12 @@ class ScrollFrame:
                 self.canvas.yview_moveto(self._target / total)
                 self._animating = False
                 return
-            self.canvas.yview_moveto((cur + diff * 0.28) / total)
-            self.canvas.after(16, self._tick)
+            # time-based easing: a slow frame moves further instead of queueing up (which is what left blank patches)
+            step = diff * (1 - math.exp(-dt / 0.06))
+            if abs(step) < 1.0:
+                step = 1.0 if diff > 0 else -1.0
+            self.canvas.yview_moveto(round(cur + step) / total)
+            self.canvas.after(14, self._tick)
         except tk.TclError:
             self._animating = False
 
