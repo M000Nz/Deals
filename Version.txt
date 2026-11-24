@@ -1,6 +1,3 @@
-26
+27
 https://github.com/M000Nz/Deals
-note: New D* app icon for the installer, desktop shortcut and window
-note: Restoring a backup now restarts Deals by itself and upgrades old backups
-note: On For you, Interested now clears the card but still teaches your suggestions
-note: Fixes a crash when opening a very old database
+note: JB Hi-Fi prices are now double-checked against the product page, fixing wrong prices on some watches

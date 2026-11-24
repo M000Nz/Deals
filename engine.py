@@ -37,7 +37,7 @@ from urllib.parse import parse_qs, quote, quote_plus, urlencode, urljoin, urlpar
 import requests
 from bs4 import BeautifulSoup
 
-ENGINE_VERSION = 26
+ENGINE_VERSION = 27
 GITHUB_REPO = "M000Nz/Deals"
 GITHUB_API = "https://api.github.com"
 FROZEN = bool(getattr(sys, "frozen", False))                  # True when running as the packaged Deals.exe
@@ -1848,6 +1848,83 @@ def reset_health(con):
     con.commit()
 
 
+# Stores whose search pages are built by JavaScript and have shown the wrong figure as the price. For these, each
+# product's own page is read for the price the shop publishes in its page tags - that one is always the real price.
+VERIFY_STORES = ("jb hi-fi", "jbhifi")
+_PAGE_PRICE_CACHE: dict[str, tuple[float, float | None]] = {}
+
+
+def page_price(html: str) -> float | None:
+    """The price a product page publishes about itself (og:price / product:price meta, itemprop, JSON-LD). None if unsure."""
+    soup = make_soup(html)
+    for m in soup.find_all("meta"):
+        key = (m.get("property") or m.get("name") or m.get("itemprop") or "").lower()
+        if key in ("og:price:amount", "product:price:amount", "product:sale_price:amount", "price"):
+            v = parse_price(str(m.get("content") or ""))
+            if v and v > 0:
+                return v
+    el = soup.find(attrs={"itemprop": "price"})
+    if el is not None:
+        v = parse_price(str(el.get("content") or el.get_text(" ", strip=True)))
+        if v and v > 0:
+            return v
+    for sc in soup.find_all("script", type="application/ld+json"):
+        try:
+            data = json.loads(sc.string or "")
+        except (ValueError, TypeError):
+            continue
+        stack = data if isinstance(data, list) else [data]
+        while stack:
+            n = stack.pop()
+            if isinstance(n, dict):
+                offers = n.get("offers")
+                for o in (offers if isinstance(offers, list) else [offers] if isinstance(offers, dict) else []):
+                    v = parse_price(str(o.get("price") or o.get("lowPrice") or ""))
+                    if v and v > 0:
+                        return v
+                stack.extend(x for x in n.values() if isinstance(x, (dict, list)))
+            elif isinstance(n, list):
+                stack.extend(n)
+    return None
+
+
+def verify_store_prices(offers: list, limit: int = 24, budget: float = 9.0) -> int:
+    """Correct prices from the product pages of VERIFY_STORES. Returns how many prices were changed."""
+    todo = [o for o in offers if o.source == "store" and any(w in o.store.lower() for w in VERIFY_STORES)][:limit]
+    if not todo:
+        return 0
+    fixed, now = 0, time.time()
+
+    def one(o):
+        hit = _PAGE_PRICE_CACHE.get(o.url)
+        if hit and now - hit[0] < 1800:
+            return o, hit[1]
+        try:
+            v = page_price(fetch(o.url, timeout=(4, 6)))
+        except Exception:  # noqa: BLE001
+            return o, None
+        if v:
+            _PAGE_PRICE_CACHE[o.url] = (now, v)
+        return o, v
+
+    ex = ThreadPoolExecutor(max_workers=8)
+    futs = [ex.submit(one, o) for o in todo]
+    try:
+        for fut in wait(futs, timeout=budget)[0]:
+            o, v = fut.result()
+            if v and abs(v - o.price) > 0.5:
+                old = o.price
+                o.price = v
+                if not o.was_price and v * 1.05 < old < v * 5:      # the figure we grabbed was probably the crossed-out price
+                    o.was_price = old
+                elif o.was_price and o.was_price <= v:
+                    o.was_price = None
+                fixed += 1
+    finally:
+        ex.shutdown(wait=False, cancel_futures=True)
+    return fixed
+
+
 def find_offers_many(queries: list[tuple], stores: list[dict], cfg: dict | None = None, progress=None,
                      deadline: float = 45.0, skip_dead: bool = True) -> dict:
     """Scan every (search, store) pair at once on one shared pool. queries = [(key, keywords)].
@@ -1892,6 +1969,10 @@ def find_offers_many(queries: list[tuple], stores: list[dict], cfg: dict | None 
         for o in raw:
             o.used = o.used or bool(USED_RE.search(o.title))
         visible = [o for o in raw if not is_hidden_offer(o, words) and o.url not in hid]
+        try:
+            verify_store_prices(visible)
+        except Exception:  # noqa: BLE001
+            pass
         ranked, junk = drop_junk_prices(rank_offers(kw, visible))
         ranked = apply_ozb_discount(ranked)
         try:
