@@ -1,4 +1,3 @@
-31
+32
 https://github.com/M000Nz/Deals
-note: New themed drop-down lists with a tick on your current choice and hover tips explaining each option
-note: Labels, buttons and menu items now start with a capital letter
+note: Deals now checks for updates every time it starts

@@ -124,7 +124,7 @@ def ensure_deps():
 ensure_deps()
 import engine as E  # noqa: E402
 
-if getattr(E, "ENGINE_VERSION", 0) < 31:
+if getattr(E, "ENGINE_VERSION", 0) < 32:
     _r = tk.Tk()
     _r.withdraw()
     messagebox.showerror("Deals", "engine.py is out of date.\n\nReplace it with the new engine.py from the "
@@ -3150,10 +3150,7 @@ class App(tk.Tk):
                 "updates", f"Couldn't read that update address.\n\nYou have version {E.ENGINE_VERSION}.")
         latest = m["version"]
         if latest > E.ENGINE_VERSION:
-            snooze = E.get_settings(E.db()).get("update_later", "")
-            if silent and snooze == f"{latest}:{time.strftime('%Y%m%d')}":
-                return                                              # said "Later" today - don't nag again until tomorrow
-            self.show_update(m)
+            self.show_update(m)                                     # "Later" only lasts until the next launch
         elif not silent:
             messagebox.showinfo("updates", f"You have the newest version.\n\nYou have: version {E.ENGINE_VERSION}\n"
                                 f"Newest: version {latest}")
@@ -3272,10 +3269,10 @@ class App(tk.Tk):
         self.after(300, self.on_close)
 
     def auto_update_check(self):
-        """On start-up (and now and then) quietly look for a new version."""
+        """Every time Deals starts, quietly look for a new version."""
         try:
             st = E.get_settings(E.db())
-            if (st.get("update_url") or FROZEN) and time.time() - float(st.get("update_checked") or 0) > 6 * 3600:
+            if st.get("update_url") or FROZEN:                       # every launch, a few seconds after start-up
                 self.check_updates(silent=True)
         except Exception:  # noqa: BLE001
             log_error(traceback.format_exc())
