@@ -37,8 +37,18 @@ from urllib.parse import parse_qs, quote, quote_plus, urlencode, urljoin, urlpar
 import requests
 from bs4 import BeautifulSoup
 
-ENGINE_VERSION = 24
-DB_PATH = Path(__file__).parent / "dealscraper.db"
+ENGINE_VERSION = 25
+GITHUB_REPO = "M000Nz/Deals"
+GITHUB_API = "https://api.github.com"
+FROZEN = bool(getattr(sys, "frozen", False))                  # True when running as the packaged Deals.exe
+# Where your data lives: next to the program when run from source, in your user profile when installed as an .exe
+# (the install folder isn't writable and is replaced on every update).
+DATA_DIR = (Path(os.environ.get("APPDATA") or Path.home() / ".deals") / "Deals") if FROZEN else Path(__file__).resolve().parent
+try:
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+except OSError:
+    pass
+DB_PATH = DATA_DIR / "dealscraper.db"
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
 
@@ -716,15 +726,33 @@ def install_browser(log=print) -> tuple[bool, str]:
     """pip-install Playwright, then use Edge/Chrome if present or download Chromium (~150 MB)."""
     flags = {"creationflags": 0x08000000} if sys.platform == "win32" else {}
 
-    def run(args):
-        p = subprocess.Popen([sys.executable, "-m", *args], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+    def run(args, cmd=None):
+        p = subprocess.Popen(cmd or [sys.executable, "-m", *args], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                              text=True, **flags)
         for line in p.stdout:
             if line.strip():
                 log(line.strip()[:110])
         return p.wait() == 0
 
-    if not BrowserEngine.installed():
+    def playwright_install():
+        """`playwright install chromium`. In the packaged app Python isn't available, so use the bundled driver."""
+        if FROZEN:
+            try:
+                from playwright._impl._driver import compute_driver_executable, get_driver_env
+                found = compute_driver_executable()
+                cmd = (list(found) if isinstance(found, (tuple, list)) else [str(found)]) + ["install", "chromium"]
+                p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                                     env={**os.environ, **get_driver_env()}, **flags)
+                for line in p.stdout:
+                    if line.strip():
+                        log(line.strip()[:110])
+                return p.wait() == 0
+            except Exception as e:  # noqa: BLE001
+                log(f"browser download failed: {e}")
+                return False
+        return run(["playwright", "install", "chromium"])
+
+    if not BrowserEngine.installed() and not FROZEN:
         log("Installing the browser add-on...")
         if not (run(["pip", "install", "playwright"]) or run(["pip", "install", "--user", "playwright"])):
             return False, "pip couldn't install the browser add-on"
@@ -733,7 +761,7 @@ def install_browser(log=print) -> tuple[bool, str]:
     if BROWSER.start():
         return True, f"ready (using {BROWSER.channel})"
     log("No Edge/Chrome found - downloading a browser (about 150 MB)...")
-    if not run(["playwright", "install", "chromium"]):
+    if not playwright_install():
         return False, "the browser download failed"
     BROWSER.reset()
     return (True, f"ready (using {BROWSER.channel})") if BROWSER.start() else (False, BROWSER.error)
@@ -2269,6 +2297,70 @@ def update_manifest(url: str) -> dict | None:
         return None
 
 
+def release_manifest(repo: str | None = None) -> dict | None:
+    """Newest GitHub release of the packaged app: {'version','page','notes','installer','sha_url'} or None."""
+    repo = repo or GITHUB_REPO
+    try:
+        r = requests.get(f"{GITHUB_API}/repos/{repo}/releases/latest", timeout=(5, 10),
+                         headers={"User-Agent": "Deals-updater", "Accept": "application/vnd.github+json"})
+        r.raise_for_status()
+        j = r.json()
+        assets = {a["name"]: a["browser_download_url"] for a in j.get("assets", [])}
+        notes = [re.sub(r"^(?:[-*]|note:)\s*", "", ln.strip(), flags=re.I) for ln in (j.get("body") or "").splitlines()
+                 if re.match(r"\s*(?:[-*]\s+|note:)", ln, re.I)]
+        return {"version": int(re.sub(r"\D", "", j["tag_name"])), "page": j.get("html_url", ""), "notes": notes,
+                "installer": assets.get("Deals-Setup.exe"), "sha_url": assets.get("Deals-Setup.exe.sha256"), "files": [], "base": ""}
+    except (requests.RequestException, ValueError, KeyError, TypeError):
+        return None
+
+
+def fetch_update_manifest(settings: dict) -> dict | None:
+    """The right update source: GitHub releases for the packaged .exe, the Version.txt file for the .pyw files."""
+    return release_manifest() if FROZEN else update_manifest(settings.get("update_url", ""))
+
+
+def download_installer(m: dict, progress=None) -> tuple[bool, str]:
+    """Download Deals-Setup.exe for release `m`, check its SHA-256 against the published checksum, and return its path."""
+    import hashlib
+    if not m.get("installer"):
+        return False, "this release has no installer attached yet"
+    dest = Path(tempfile.mkdtemp(prefix="deals_update_")) / "Deals-Setup.exe"
+    try:
+        want = ""
+        if m.get("sha_url"):
+            want = requests.get(m["sha_url"], timeout=(6, 15), headers={"User-Agent": "Deals-updater"}).text.split()[0].lower()
+        h, got = hashlib.sha256(), 0
+        with requests.get(m["installer"], stream=True, timeout=(8, 30), headers={"User-Agent": "Deals-updater"}) as r:
+            r.raise_for_status()
+            total = int(r.headers.get("Content-Length") or 0)
+            with open(dest, "wb") as fh:
+                for chunk in r.iter_content(1 << 20):
+                    fh.write(chunk)
+                    h.update(chunk)
+                    got += len(chunk)
+                    if progress and total:
+                        progress(got, total)
+    except (requests.RequestException, OSError, IndexError) as e:
+        return False, f"couldn't download the update ({type(e).__name__}) - check your internet connection and try again"
+    if not want:
+        return False, "the release has no checksum file, so it wasn't installed"
+    if h.hexdigest().lower() != want:
+        dest.unlink(missing_ok=True)
+        return False, "the download didn't match its checksum (it may be corrupted), so it wasn't installed"
+    with open(dest, "rb") as fh:
+        if fh.read(2) != b"MZ" or got < 1_000_000:
+            return False, "the downloaded file isn't a valid installer"
+    return True, str(dest)
+
+
+def run_installer(path: str) -> None:
+    """Start the installer silently, detached from this process. The installer closes Deals if needed, installs over the
+    old files (your data is kept in your user profile) and starts the new version."""
+    flags = 0x00000008 | 0x00000200 if sys.platform == "win32" else 0                  # DETACHED_PROCESS | NEW_PROCESS_GROUP
+    subprocess.Popen([path, "/SILENT", "/SUPPRESSMSGBOXES", "/CLOSEAPPLICATIONS", "/NORESTART"],
+                     close_fds=True, creationflags=flags)
+
+
 def download_update(m: dict, app_dir=None, progress=None) -> tuple[bool, str]:
     """Download the new files, check them, back up the current ones, then swap them in. Nothing is touched unless every
     required file downloaded and compiles; if swapping fails part-way the old files are put back."""
@@ -3197,7 +3289,9 @@ def set_autostart(on: bool, script: str | None = None):
     script = script or str(Path(__file__).parent / "DealScraper.pyw")
     py = sys.executable
     f.parent.mkdir(parents=True, exist_ok=True)
-    if sys.platform.startswith("win"):
+    if FROZEN and sys.platform.startswith("win"):               # the packaged exe is the program itself
+        f.write_text(f'@echo off\r\nstart "" "{py}" --minimized\r\n', encoding="utf-8")
+    elif sys.platform.startswith("win"):
         pyw = py[:-10] + "pythonw.exe" if py.lower().endswith("python.exe") else py
         f.write_text(f'@echo off\r\ncd /d "{Path(script).parent}"\r\nstart "" "{pyw}" "{script}" --minimized\r\n', encoding="utf-8")
     elif sys.platform == "darwin":

@@ -142,7 +142,9 @@ gift cards, bonuses, delivery, instalments (Zip, Afterpay) and "save $X" are ign
 - **Settings**: cashback % (cards show the price after it), run at startup (starts minimised and checks hourly),
   export data (CSV), back up / restore the database. Alert passwords go in your system password store if
   `keyring` is installed.
-- **Sharing**: `build_exe.bat` / `build_exe.sh` build a standalone app with PyInstaller (not tested here).
+- **Windows app (no Python needed)**: download `Deals-Setup.exe` from the [Releases page](https://github.com/M000Nz/Deals/releases/latest) and run it. Your data lives in `%APPDATA%\Deals`. Windows may show a "SmartScreen" warning because the app isn't code-signed yet: click *More info > Run anyway*.
+- **Updating the app**: the installed app checks GitHub Releases, downloads `Deals-Setup.exe`, verifies its SHA-256 checksum and installs it silently, then reopens.
+- **Publishing a release (maintainer)**: raise `ENGINE_VERSION` in `engine.py` and the first line of `Version.txt`, add `note:` lines, commit, then `git tag v26 && git push origin v26`. GitHub Actions (`.github/workflows/release.yml`) builds the exe, self-tests it, builds the installer and publishes the release. `build_exe.bat` is only for local test builds.
 - Help > "fair use and privacy" explains what the app does and its limits.
 
 ## Saved searches, compare, and more (v20)

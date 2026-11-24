@@ -23,10 +23,35 @@ import tkinter as tk
 from tkinter import font as tkfont
 from tkinter import filedialog, messagebox
 
+FROZEN = bool(getattr(sys, "frozen", False))                 # running as the packaged Deals.exe
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
-NO_PIL_MARK = os.path.join(HERE, ".no_pillow")
-ERR_LOG = os.path.join(HERE, "deals_error.log")
+# Your data (database, error log) sits next to the program from source, or in %APPDATA%\\Deals when installed.
+DATA_HOME = os.path.join(os.environ.get("APPDATA") or os.path.expanduser("~"), "Deals") if FROZEN else HERE
+try:
+    os.makedirs(DATA_HOME, exist_ok=True)
+except OSError:
+    pass
+NO_PIL_MARK = os.path.join(DATA_HOME, ".no_pillow")
+ERR_LOG = os.path.join(DATA_HOME, "deals_error.log")
+
+if "--selftest" in sys.argv:                                   # used by the automatic build to prove the .exe works
+    try:
+        import engine as _E
+        import selftest as _S
+        _problems = _S.run()
+        _out = "\n".join(_problems) if _problems else "All checks passed."
+        _out = f"Deals {_E.ENGINE_VERSION} (frozen={FROZEN})\n" + _out
+    except Exception:  # noqa: BLE001
+        import traceback as _tb
+        _problems, _out = ["crash"], _tb.format_exc()
+    try:
+        with open(os.path.join(DATA_HOME, "selftest_result.txt"), "w", encoding="utf-8") as _f:
+            _f.write(_out)
+    except OSError:
+        pass
+    print(_out)
+    sys.exit(1 if _problems else 0)
 
 try:
     import ui_kit as ui
@@ -65,6 +90,8 @@ def _pip(pkgs):
 
 
 def ensure_deps():
+    if FROZEN:                                                  # everything is already inside the packaged app
+        return
     missing = [p for p, m in (("requests", "requests"), ("beautifulsoup4", "bs4")) if not _has(m)]
     want_pil = not _has("PIL") and not os.path.exists(NO_PIL_MARK)
     if not missing and not want_pil:
@@ -97,7 +124,7 @@ def ensure_deps():
 ensure_deps()
 import engine as E  # noqa: E402
 
-if getattr(E, "ENGINE_VERSION", 0) < 24:
+if getattr(E, "ENGINE_VERSION", 0) < 25:
     _r = tk.Tk()
     _r.withdraw()
     messagebox.showerror("Deals", "engine.py is out of date.\n\nReplace it with the new engine.py from the "
@@ -2956,6 +2983,8 @@ class App(tk.Tk):
     def check_updates(self, silent=False):
         con = E.db()
         url = E.get_settings(con).get("update_url", "")
+        if FROZEN:
+            url = "github-releases"                              # the installed app always checks its GitHub releases
         if not url and not silent:
             try:
                 d = Form(self, "check for updates", [{"key": "url", "label": "update address", "width": 44, "default": ""}],
@@ -2977,7 +3006,7 @@ class App(tk.Tk):
             self.set_status(f"checking for updates...  (you have version {E.ENGINE_VERSION})")
 
         def work():
-            m = E.update_manifest(url)
+            m = E.fetch_update_manifest(E.get_settings(E.db()))
             self.q.put(lambda: self.update_result(m, silent))
         threading.Thread(target=work, daemon=True).start()
 
@@ -3026,12 +3055,11 @@ class App(tk.Tk):
         bar = tk.Frame(box, bg=P["bg"])
         bar.pack(anchor="w", pady=(18, 0))
         self._update_bar = bar
-        frozen = getattr(sys, "frozen", False)
+        frozen = FROZEN
         if frozen:
-            self._update_msg.configure(text="This copy of Deals is a packaged app and can't update itself - download the new "
-                                            "version from the page below.")
-            self.button(bar, "Open download page", lambda: self.open_url(m.get("page") or ""), pad=(22, 9), style="solid",
-                        font=self.f_bold).pack(side="left")
+            self._update_msg.configure(text="Deals will download the update, check it, and restart itself. "
+                                            "Your watchlist and settings are kept.")
+            self.button(bar, "Update now", lambda: self.run_update(m), pad=(22, 9), style="solid", font=self.f_bold).pack(side="left")
         else:
             self.button(bar, "Update now", lambda: self.run_update(m), pad=(22, 9), style="solid", font=self.f_bold).pack(side="left")
             self._update_msg.configure(text="Your current files are backed up first, so you can always go back.")
@@ -3063,11 +3091,15 @@ class App(tk.Tk):
         self._update_msg.configure(text="Downloading the update...  please don't close Deals.", fg=self.P["fg"])
 
         def prog(i, n):
-            self.q.put(lambda: self._update_msg.configure(text=f"Downloading the update...  file {min(i + 1, n)} of {n}"))
+            if FROZEN:                                           # bytes so far / total bytes
+                self.q.put(lambda: self._update_msg.configure(
+                    text=f"Downloading the update...  {i * 100 // max(n, 1)}%  ({i / 1048576:.0f} of {n / 1048576:.0f} MB)"))
+            else:
+                self.q.put(lambda: self._update_msg.configure(text=f"Downloading the update...  file {min(i + 1, n)} of {n}"))
 
         def work():
             try:
-                ok, msg = E.download_update(m, progress=prog)
+                ok, msg = E.download_installer(m, progress=prog) if FROZEN else E.download_update(m, progress=prog)
             except Exception:  # noqa: BLE001
                 log_error(traceback.format_exc())
                 ok, msg = False, "something went wrong - see Help > open error log. Your files were not changed."
@@ -3078,6 +3110,18 @@ class App(tk.Tk):
         self._updating = False
         for w in self._update_bar.winfo_children():
             w.destroy()
+        if ok and FROZEN:                                        # msg is the verified installer's path
+            self._update_msg.configure(text=f"\u2713 Verified. Installing version {m['version']} - Deals will close and reopen "
+                                            "by itself in a few seconds.", fg=self.P["accent"])
+            try:
+                E.run_installer(msg)
+            except OSError:
+                log_error(traceback.format_exc())
+                self._update_msg.configure(text="Couldn't start the installer - it was saved here, so you can run it yourself:\n"
+                                           + msg, fg=self.P["alert"])
+                return
+            self.after(1200, self.on_close)
+            return
         if not ok:
             self._update_msg.configure(text="The update didn't install: " + msg, fg=self.P["alert"])
             self.button(self._update_bar, "Try again", lambda: self.run_update(m), pad=(20, 9), style="solid").pack(side="left")
@@ -3091,7 +3135,8 @@ class App(tk.Tk):
 
     def restart_app(self):
         try:
-            subprocess.Popen([sys.executable] + sys.argv, cwd=os.path.dirname(os.path.abspath(sys.argv[0])) or None)
+            args = sys.argv[1:] if FROZEN else sys.argv
+            subprocess.Popen([sys.executable] + args, cwd=os.path.dirname(os.path.abspath(sys.argv[0])) or None)
         except OSError:
             log_error(traceback.format_exc())
             return messagebox.showinfo("restart", "Couldn't restart automatically - please close and reopen Deals.")
@@ -3101,7 +3146,7 @@ class App(tk.Tk):
         """On start-up (and now and then) quietly look for a new version."""
         try:
             st = E.get_settings(E.db())
-            if st.get("update_url") and time.time() - float(st.get("update_checked") or 0) > 6 * 3600:
+            if (st.get("update_url") or FROZEN) and time.time() - float(st.get("update_checked") or 0) > 6 * 3600:
                 self.check_updates(silent=True)
         except Exception:  # noqa: BLE001
             log_error(traceback.format_exc())

@@ -1,5 +1,5 @@
-24
+25
 https://github.com/M000Nz/Deals
-note: Deals can now update itself - press Update now and your old files are backed up first
-note: Fixed JB Hi-Fi showing the crossed-out ticket price instead of the real price
-note: Update pop-up shows what is new and asks before installing
+note: Deals now installs like a normal Windows app (Deals-Setup.exe) and updates itself with one click
+note: Downloads are checked against a checksum before installing
+note: Your watchlist and settings are kept safe in your user folder when updating

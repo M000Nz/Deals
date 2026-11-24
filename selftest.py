@@ -1,10 +1,12 @@
 """Self-check for the page readers: feeds saved store-page layouts (fixtures/) through the parser and checks
 that titles and prices come out right. Run:  python selftest.py   (also in Deals: Help > run self-check)."""
+import sys
 from pathlib import Path
 
 import engine as E
 
-HERE = next((p for p in (Path(__file__).parent / "fixtures", Path(__file__).parent / "Fixtures") if p.exists()), Path(__file__).parent / "fixtures")
+_BASE = Path(getattr(sys, "_MEIPASS", Path(__file__).parent))      # inside the packaged app, files are unpacked here
+HERE = next((p for p in (_BASE / "fixtures", _BASE / "Fixtures") if p.exists()), _BASE / "fixtures")
 # fixture -> {product keyword: (expected price, expected was-price or None)}
 EXPECT = {
     "jsonld_grid.html": {"xm5": (399.0, None), "quietcomfort": (549.0, None)},
