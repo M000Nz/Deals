@@ -155,7 +155,7 @@ def ensure_deps():
 ensure_deps()
 import engine as E  # noqa: E402
 
-if getattr(E, "ENGINE_VERSION", 0) < 51:
+if getattr(E, "ENGINE_VERSION", 0) < 52:
     _r = tk.Tk()
     _r.withdraw()
     messagebox.showerror("Deals", "engine.py is out of date.\n\nReplace it with the new engine.py from the "
@@ -1613,6 +1613,19 @@ class App(tk.Tk):
                                      "alerts keep working. Right-click the icon to quit." if self.tray_close else
                             "The close button now quits Deals.")
 
+    def exit_for_update(self):
+        """Leave completely (no lingering process) so the installer can replace the files."""
+        try:
+            E.set_setting(E.db(), "geometry", self.geometry())
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            if getattr(self, "tray", None):
+                self.tray.stop()
+        except Exception:  # noqa: BLE001
+            pass
+        os._exit(0)
+
     def force_quit(self):
         """Stop Deals immediately, including any background browser, even if the window is hidden or stuck."""
         try:
@@ -2833,7 +2846,7 @@ class App(tk.Tk):
                         im.draft("RGB", (self.iw * 2, self.ih * 2))
                     except Exception:  # noqa: BLE001
                         pass
-                    if min(im.size) < 51:                   # a tracking pixel or icon, not a product photo
+                    if min(im.size) < 52:                   # a tracking pixel or icon, not a product photo
                         why.append("too small (placeholder?)")
                         continue
                     return self._prepare(im)
@@ -3742,14 +3755,17 @@ class App(tk.Tk):
             self.tray_status(f"installing update {m['version']}...")
             self._upd(text=f"\u2713 Verified. Installing version {m['version']} - Deals will close and reopen "
                                             "by itself in a few seconds.", fg=self.P["accent"])
-            try:
-                E.run_installer(msg)
-            except OSError:
-                log_error(traceback.format_exc())
-                self._upd(text="Couldn't start the installer - it was saved here, so you can run it yourself:\n"
-                                           + msg, fg=self.P["alert"])
-                return
-            self.after(1200, self.on_close)
+            def launch():
+                E.prepare_for_installer()                        # browser + helper processes must be gone first
+                try:
+                    E.run_installer(msg)
+                except OSError:
+                    log_error(traceback.format_exc())
+                    self.q.put(lambda: self._upd(text="Couldn't start the installer - it was saved here, so you can run it "
+                                                 "yourself:\n" + msg, fg=self.P["alert"]))
+                    return
+                self.q.put(lambda: self.after(700, self.exit_for_update))
+            threading.Thread(target=launch, daemon=True).start()
             return
         if not ok:
             self._upd(text="The update didn't install: " + msg, fg=self.P["alert"])

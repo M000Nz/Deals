@@ -44,3 +44,17 @@ Name: "{autoprograms}\Deals (classic window)"; Filename: "{app}\Deals.exe"; Para
 Filename: "{app}\Deals.exe"; Description: "Start Deals"; Flags: nowait postinstall
 
 ; Your watchlist and settings live in %APPDATA%\Deals and are deliberately NOT removed on uninstall.
+
+[Code]
+// Setup lists Deals.exe and its helper node.exe as "in use" and cannot always close them. Stop them first
+// (only processes that run from a ...\Deals\ folder, so other programs are left alone).
+function InitializeSetup(): Boolean;
+var
+  rc: Integer;
+begin
+  Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
+       '-NoProfile -NonInteractive -WindowStyle Hidden -Command "Get-Process | Where-Object { $_.Path -and $_.Path -like ''*\Deals\*'' -and ($_.Name -eq ''Deals'' -or $_.Name -eq ''node'') } | Stop-Process -Force -ErrorAction SilentlyContinue"',
+       '', SW_HIDE, ewWaitUntilTerminated, rc);
+  Sleep(600);
+  Result := True;
+end;

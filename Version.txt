@@ -1,4 +1,4 @@
-51
+52
 https://github.com/M000Nz/Deals
-note: Testing sources, checking sources and repairing sources now show a progress card with a bar, an "N of M" count and the shop being tested
-note: Shared shop list from GitHub (stores.json) - new shops and fixed addresses without an app update
+note: Fixed updates getting stuck on "applications are using files" - Deals now closes its browser helper (node.exe) before the installer starts
+note: The installer also stops any leftover Deals processes itself, so installing over a running copy works

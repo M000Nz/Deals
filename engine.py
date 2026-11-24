@@ -37,7 +37,7 @@ from urllib.parse import parse_qs, quote, quote_plus, unquote, urlencode, urljoi
 import requests
 from bs4 import BeautifulSoup
 
-ENGINE_VERSION = 51
+ENGINE_VERSION = 52
 GITHUB_REPO = "M000Nz/Deals"
 GITHUB_API = "https://api.github.com"
 FROZEN = bool(getattr(sys, "frozen", False))                  # True when running as the packaged Deals.exe
@@ -2869,6 +2869,28 @@ def clean_env() -> dict:
     env = {k: v for k, v in os.environ.items() if not k.startswith(("_PYI", "_MEIPASS"))}
     env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
     return env
+
+
+def prepare_for_installer() -> None:
+    """Before the installer starts: close the hidden browser and stop every helper process that is running from Deals'
+    own install folder (the browser driver, node.exe). Otherwise Setup lists them as 'in use' and cannot continue."""
+    try:
+        t = threading.Thread(target=BROWSER.reset, daemon=True)
+        t.start()
+        t.join(8)
+    except Exception:  # noqa: BLE001
+        pass
+    if sys.platform != "win32" or not FROZEN:
+        return
+    try:
+        here = str(Path(sys.executable).resolve().parent).replace("'", "''")
+        me = os.getpid()
+        ps = ("Get-Process | Where-Object { $_.Id -ne %d -and $_.Path -and $_.Path.StartsWith('%s\\') } | "
+              "Stop-Process -Force -ErrorAction SilentlyContinue" % (me, here))
+        subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-WindowStyle", "Hidden", "-Command", ps],
+                       timeout=15, creationflags=0x08000000, env=clean_env(), capture_output=True)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def run_installer(path: str) -> None:
