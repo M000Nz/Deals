@@ -1,0 +1,8 @@
+# Core (Deals offers to install these on first run)
+requests
+beautifulsoup4
+Pillow
+# Optional but recommended
+lxml          # much lower CPU when reading store pages
+keyring       # keeps alert passwords in your system password store
+playwright    # browser mode for JavaScript-heavy stores

@@ -1,0 +1,3275 @@
+"""
+Deal Scraper engine: built-in store catalog, scraping, keyword matching, alerts.
+No UI code lives here (see DealScraper.pyw).
+"""
+from __future__ import annotations
+
+import json
+import math
+import random
+import re
+import shlex
+import smtplib
+import sqlite3
+import asyncio
+import atexit
+import importlib
+import importlib.util
+import subprocess
+import sys
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed, wait, FIRST_COMPLETED
+from concurrent.futures import TimeoutError as FutTimeout
+from dataclasses import dataclass, field, replace
+import csv
+import os
+import shutil
+import html as _html
+import xml.etree.ElementTree as ET
+from datetime import datetime
+from email.message import EmailMessage
+from email.utils import parsedate_to_datetime
+from pathlib import Path
+from urllib.parse import parse_qs, quote_plus, urlencode, urljoin, urlparse
+
+import requests
+from bs4 import BeautifulSoup
+
+ENGINE_VERSION = 19
+DB_PATH = Path(__file__).parent / "dealscraper.db"
+UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+      "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
+
+# --------------------------------------------------------------------------- #
+# Built-in catalog: 30 tech/electronics retailers per region.
+# {query} is replaced with the search words. These are each site's usual search
+# URL format; sites change them, so use "Test All Stores" to see which still work.
+# --------------------------------------------------------------------------- #
+CATALOG: dict[str, list[tuple[str, str]]] = {
+    "Australia": [
+        ("StaticICE (200+ AU stores)", "https://www.staticice.com.au/cgi-bin/search.cgi?q={query}&spos=3"),
+        ("OzBargain (limited-time deals)", "ozb:feeds"),
+        ("Amazon AU", "https://www.amazon.com.au/s?k={query}"),
+        ("JB Hi-Fi", "https://www.jbhifi.com.au/search?query={query}"),
+        ("Harvey Norman", "https://www.harveynorman.com.au/catalogsearch/result/?q={query}"),
+        ("The Good Guys", "https://www.thegoodguys.com.au/SearchDisplay?searchTerm={query}"),
+        ("Officeworks", "https://www.officeworks.com.au/shop/officeworks/search?q={query}"),
+        ("Bing Lee", "https://www.binglee.com.au/search?q={query}"),
+        ("Kogan", "https://www.kogan.com/au/shop/?q={query}"),
+        ("Catch", "https://www.catch.com.au/search?query={query}"),
+        ("Scorptec", "https://www.scorptec.com.au/search/go?w={query}"),
+        ("PLE Computers", "https://www.ple.com.au/Search?q={query}"),
+        ("Umart", "https://www.umart.com.au/search?q={query}"),
+        ("Mwave", "https://www.mwave.com.au/searchresult?w={query}"),
+        ("Centre Com", "https://www.centrecom.com.au/search?q={query}"),
+        ("MSY", "https://www.msy.com.au/search?q={query}"),
+        ("Computer Alliance", "https://www.computeralliance.com.au/search?q={query}"),
+        ("Apple AU", "https://www.apple.com/au/search/{query}"),
+        ("Dell AU", "https://www.dell.com/en-au/search/{query}"),
+        ("Lenovo AU", "https://www.lenovo.com/au/en/search?text={query}"),
+        ("HP AU", "https://www.hp.com/au-en/shop/sitesearch?keyword={query}"),
+        ("Samsung AU", "https://www.samsung.com/au/search/?searchvalue={query}"),
+        ("Big W", "https://www.bigw.com.au/search?q={query}"),
+        ("Target AU", "https://www.target.com.au/search?text={query}"),
+        ("Kmart", "https://www.kmart.com.au/search/?searchTerm={query}"),
+        ("EB Games", "https://www.ebgames.com.au/search?q={query}"),
+        ("Mighty Ape", "https://www.mightyape.com.au/search?q={query}"),
+        ("VideoPro", "https://videopro.com.au/search?q={query}"),
+        ("Camera House", "https://www.camerahouse.com.au/catalogsearch/result/?q={query}"),
+        ("Microsoft AU", "https://www.microsoft.com/en-au/search/shop?q={query}"),
+        ("Back Market AU", "https://www.backmarket.com.au/en-au/search?q={query}"),
+        ("MyDeal", "https://www.mydeal.com.au/search?q={query}"),
+        ("Appliances Online", "https://www.appliancesonline.com.au/search/?q={query}"),
+        ("Mobileciti", "https://www.mobileciti.com.au/search?q={query}"),
+        ("Allphones", "https://www.allphones.com.au/search?q={query}"),
+        ("PC Case Gear", "https://www.pccasegear.com/search?query={query}"),
+        ("JW Computers", "https://www.jw.com.au/search?q={query}"),
+        ("Evatech", "https://www.evatech.com.au/search?q={query}"),
+        ("Shopping Express", "https://www.shoppingexpress.com.au/search?q={query}"),
+        ("AusPCMarket", "https://www.auspcmarket.com.au/search?q={query}"),
+        ("Harris Technology", "https://www.harristechnology.com.au/search?q={query}"),
+        ("Digidirect", "https://www.digidirect.com.au/catalogsearch/result/?q={query}"),
+        ("Ted's Cameras", "https://www.teds.com.au/catalogsearch/result/?q={query}"),
+        ("Myer", "https://www.myer.com.au/search?query={query}"),
+        ("David Jones", "https://www.davidjones.com/search?q={query}"),
+        ("Bose AU", "https://www.bose.com.au/en_au/search.html?q={query}"),
+        ("JBL AU", "https://www.jbl.com.au/search?q={query}"),
+        ("Garmin AU", "https://www.garmin.com/en-AU/search/?query={query}"),
+        ("Razer AU", "https://www.razer.com/au-en/search?q={query}"),
+        ("PlayStation Direct", "https://direct.playstation.com/en-au/search?q={query}"),
+        ("Dyson AU", "https://www.dyson.com.au/search?q={query}"),
+        ("Gametraders", "https://www.gametraders.com.au/search?q={query}"),
+        ("Costco AU", "https://www.costco.com.au/search?text={query}"),
+        ("Bunnings", "https://www.bunnings.com.au/search/products?q={query}"),
+        ("Mitre 10", "https://www.mitre10.com.au/search?q={query}"),
+        ("Total Tools", "https://www.totaltools.com.au/catalogsearch/result/?q={query}"),
+        ("Sydney Tools", "https://www.sydneytools.com.au/search?q={query}"),
+        ("Flower Power", "https://www.flowerpower.com.au/search?q={query}"),
+        ("IKEA AU", "https://www.ikea.com/au/en/search/?q={query}"),
+        ("Amart Furniture", "https://www.amartfurniture.com.au/search?q={query}"),
+        ("Fantastic Furniture", "https://www.fantasticfurniture.com.au/search?q={query}"),
+        ("Freedom", "https://www.freedom.com.au/search?q={query}"),
+        ("Temple & Webster", "https://www.templeandwebster.com.au/search?q={query}"),
+        ("Adairs", "https://www.adairs.com.au/search/?q={query}"),
+        ("Bed Bath N' Table", "https://www.bedbathntable.com.au/search?q={query}"),
+        ("Spotlight", "https://www.spotlightstores.com/search?q={query}"),
+        ("Peter's of Kensington", "https://www.petersofkensington.com.au/search?q={query}"),
+        ("Kitchen Warehouse", "https://www.kitchenwarehouse.com.au/search?q={query}"),
+        ("Woolworths", "https://www.woolworths.com.au/shop/search/products?searchTerm={query}"),
+        ("Coles", "https://www.coles.com.au/search/products?q={query}"),
+        ("Dan Murphy's", "https://www.danmurphys.com.au/search?searchTerm={query}"),
+        ("Chemist Warehouse", "https://www.chemistwarehouse.com.au/search?searchtext={query}"),
+        ("Priceline", "https://www.priceline.com.au/search?q={query}"),
+        ("Sephora AU", "https://www.sephora.com.au/search?q={query}"),
+        ("Adore Beauty", "https://www.adorebeauty.com.au/search?q={query}"),
+        ("MECCA", "https://www.mecca.com/en-au/search/?q={query}"),
+        ("Oz Hair & Beauty", "https://www.ozhairandbeauty.com/search?q={query}"),
+        ("Healthylife", "https://www.healthylife.com.au/search?q={query}"),
+        ("Rebel Sport", "https://www.rebelsport.com.au/search?q={query}"),
+        ("Decathlon AU", "https://www.decathlon.com.au/search?q={query}"),
+        ("Anaconda", "https://www.anacondastores.com/search?q={query}"),
+        ("BCF", "https://www.bcf.com.au/search?q={query}"),
+        ("Kathmandu", "https://www.kathmandu.com.au/search?q={query}"),
+        ("Macpac", "https://www.macpac.com.au/search?q={query}"),
+        ("Snowys", "https://www.snowys.com.au/search?q={query}"),
+        ("Torpedo7 AU", "https://www.torpedo7.com.au/search?q={query}"),
+        ("Nike AU", "https://www.nike.com/au/w?q={query}"),
+        ("Adidas AU", "https://www.adidas.com.au/search?q={query}"),
+        ("The Iconic", "https://www.theiconic.com.au/catalog/?q={query}"),
+        ("Culture Kings", "https://www.culturekings.com.au/search?q={query}"),
+        ("Platypus Shoes", "https://www.platypusshoes.com.au/search?q={query}"),
+        ("Hype DC", "https://www.hypedc.com/search?q={query}"),
+        ("Uniqlo AU", "https://www.uniqlo.com/au/en/search?q={query}"),
+        ("Cotton On", "https://cottonon.com/AU/search/?q={query}"),
+        ("Baby Bunting", "https://www.babybunting.com.au/search?q={query}"),
+        ("Toys R Us AU", "https://www.toysrus.com.au/search?q={query}"),
+        ("Toyworld", "https://www.toyworld.com.au/search?q={query}"),
+        ("LEGO AU", "https://www.lego.com/en-au/search?q={query}"),
+        ("Pet Circle", "https://www.petcircle.com.au/search?q={query}"),
+        ("Petbarn", "https://www.petbarn.com.au/search?q={query}"),
+        ("PetStock", "https://www.petstock.com.au/search?q={query}"),
+        ("Supercheap Auto", "https://www.supercheapauto.com.au/search?q={query}"),
+        ("Repco", "https://www.repco.com.au/en/search?q={query}"),
+        ("Autobarn", "https://www.autobarn.com.au/search?q={query}"),
+        ("Dymocks", "https://www.dymocks.com.au/search?q={query}"),
+        ("Booktopia", "https://www.booktopia.com.au/search?keywords={query}"),
+        ("Sky Music", "https://www.skymusic.com.au/search?q={query}"),
+        ("Store DJ", "https://www.storedj.com.au/search?q={query}"),
+    ],
+}
+REGIONS = list(CATALOG)
+
+# Which kinds of products each store sells. A search only visits stores that match what you typed
+# (plus the general stores), which is how the list can grow without searches getting slower.
+STORE_CATS = {
+    "StaticICE (200+ AU stores)": "all", "OzBargain (limited-time deals)": "all",
+    "Amazon AU": "general", "Kogan": "general", "Catch": "general", "MyDeal": "general", "Big W": "general",
+    "Target AU": "general", "Kmart": "general", "Myer": "general", "David Jones": "general",
+    "Costco AU": "general", "Back Market AU": "tech",
+    "JB Hi-Fi": "tech gaming home", "Harvey Norman": "tech home", "The Good Guys": "tech home",
+    "Officeworks": "tech office", "Bing Lee": "tech home", "Scorptec": "tech", "PLE Computers": "tech",
+    "Umart": "tech", "Mwave": "tech", "Centre Com": "tech", "MSY": "tech", "Computer Alliance": "tech",
+    "Apple AU": "tech", "Dell AU": "tech", "Lenovo AU": "tech", "HP AU": "tech", "Samsung AU": "tech home",
+    "EB Games": "gaming toys", "Mighty Ape": "gaming toys books", "VideoPro": "tech", "Camera House": "tech",
+    "Microsoft AU": "tech gaming", "Appliances Online": "home", "Mobileciti": "tech", "Allphones": "tech",
+    "PC Case Gear": "tech", "JW Computers": "tech", "Evatech": "tech", "Shopping Express": "tech home",
+    "AusPCMarket": "tech", "Harris Technology": "tech", "Digidirect": "tech", "Ted's Cameras": "tech",
+    "Bose AU": "tech", "JBL AU": "tech", "Garmin AU": "tech sports", "Razer AU": "tech gaming",
+    "PlayStation Direct": "gaming", "Dyson AU": "home beauty", "Gametraders": "gaming",
+    "Bunnings": "diy garden home", "Mitre 10": "diy garden", "Total Tools": "diy auto", "Sydney Tools": "diy",
+    "Flower Power": "garden", "IKEA AU": "home", "Amart Furniture": "home", "Fantastic Furniture": "home",
+    "Freedom": "home", "Temple & Webster": "home", "Adairs": "home", "Bed Bath N' Table": "home",
+    "Spotlight": "home diy", "Peter's of Kensington": "home", "Kitchen Warehouse": "home",
+    "Woolworths": "grocery", "Coles": "grocery", "Dan Murphy's": "grocery", "Chemist Warehouse": "beauty baby",
+    "Priceline": "beauty", "Sephora AU": "beauty", "Adore Beauty": "beauty", "MECCA": "beauty",
+    "Oz Hair & Beauty": "beauty", "Healthylife": "beauty", "Rebel Sport": "sports fashion",
+    "Decathlon AU": "sports", "Anaconda": "sports outdoor", "BCF": "sports outdoor", "Kathmandu": "outdoor fashion",
+    "Macpac": "outdoor fashion", "Snowys": "outdoor", "Torpedo7 AU": "sports outdoor", "Nike AU": "fashion sports",
+    "Adidas AU": "fashion sports", "The Iconic": "fashion", "Culture Kings": "fashion", "Platypus Shoes": "fashion",
+    "Hype DC": "fashion", "Uniqlo AU": "fashion", "Cotton On": "fashion", "Baby Bunting": "baby",
+    "Toys R Us AU": "toys baby", "Toyworld": "toys", "LEGO AU": "toys", "Pet Circle": "pets", "Petbarn": "pets",
+    "PetStock": "pets", "Supercheap Auto": "auto", "Repco": "auto", "Autobarn": "auto", "Dymocks": "books",
+    "Booktopia": "books", "Sky Music": "music", "Store DJ": "music",
+}
+
+CATEGORY_WORDS = {
+    "tech": "laptop notebook macbook ipad tablet phone iphone android smartphone galaxy pixel monitor display keyboard mouse "
+            "headphones headphone earbuds airpods speaker soundbar tv television router modem ssd hdd nvme ram gpu cpu "
+            "graphics motherboard processor charger cable usb hdmi camera lens drone gopro printer scanner webcam microphone "
+            "smartwatch watch fitbit garmin kindle projector nas switch vr oculus quest powerbank sony samsung lg apple bose sennheiser jbl logitech asus acer msi lenovo dell hp nvidia amd intel canon nikon panasonic philips xiaomi google huawei oppo oneplus anker ugreen tplink netgear ubiquiti seagate wd sandisk kingston corsair razer steelseries",
+    "gaming": "playstation ps5 ps4 xbox switch nintendo steam game games gaming controller console zelda mario pokemon",
+    "home": "fridge refrigerator freezer washer washing dryer dishwasher oven microwave cooktop rangehood vacuum robot "
+            "airfryer fryer kettle toaster blender coffee espresso machine mattress sofa couch bed desk chair table lamp "
+            "heater fan aircon conditioner purifier humidifier cookware pan knife towel sheets quilt pillow rug curtain "
+            "shelf wardrobe bookcase dyson thermomix",
+    "diy": "drill saw sander grinder impact driver tool tools toolbox ladder paint wrench spanner hammer makita dewalt milwaukee "
+           "ryobi bosch stanley screws bolts timber hose generator pressure washer workbench",
+    "garden": "lawn mower mowers whipper trimmer plant plants pot seeds soil fertiliser garden bbq barbecue pergola hose "
+              "sprinkler hedge chainsaw blower",
+    "fashion": "shoes sneakers boots jacket jeans shirt tshirt hoodie dress jumper pants shorts socks bag backpack wallet "
+               "sunglasses nike adidas puma jordan asics newbalance uniqlo levis",
+    "sports": "nike adidas puma asics gym treadmill dumbbell weights kettlebell yoga bike bicycle ebike scooter golf tennis racquet cricket football "
+              "soccer basketball surfboard wetsuit fishing rod reel swimming helmet protein",
+    "outdoor": "tent camping sleeping swag hiking boots backpack esky cooler stove fishing kayak paddleboard 4wd",
+    "baby": "pram stroller cot nappy nappies carseat capsule highchair bassinet baby toddler formula",
+    "toys": "lego toy toys doll puzzle boardgame barbie nerf playmobil hotwheels kids",
+    "pets": "dog cat puppy kitten pet food leash collar litter aquarium fish bird",
+    "beauty": "perfume fragrance makeup skincare serum moisturiser shampoo conditioner hairdryer straightener vitamins "
+              "supplement razor shaver toothbrush sunscreen lipstick foundation cologne",
+    "auto": "tyre tyres tire car dashcam battery oil wiper seat cover roofrack jumpstarter",
+    "books": "book books novel textbook cookbook biography manga",
+    "grocery": "coffee tea chocolate wine beer whisky gin vodka snacks nappies milk cereal pasta",
+    "office": "pen notebook stationery whiteboard shredder laminator paper ink toner",
+    "music": "guitar piano keyboard drum amp amplifier synthesizer dj turntable ukulele violin",
+}
+WORD_CATS: dict[str, set[str]] = {}
+for _c, _w in CATEGORY_WORDS.items():
+    for _x in _w.split():
+        WORD_CATS.setdefault(_x, set()).add(_c)
+
+
+def detect_categories(keywords: str) -> set[str]:
+    cats: set[str] = set()
+    for t in re.findall(r"[a-z0-9]+", keywords.lower()):
+        for w in (t, t.rstrip("s")):
+            cats |= WORD_CATS.get(w, set())
+    return cats
+
+
+def select_stores(stores: list[dict], keywords: str, cfg: dict | None = None) -> list[dict]:
+    """Stores worth searching for these keywords: general + price-comparison sites + the matching categories.
+    If the words say nothing about the kind of product, every store is searched."""
+    if (cfg or {}).get("scope", "smart") == "all":
+        return stores
+    cats = detect_categories(keywords)
+    if not cats:
+        return stores
+    keep = []
+    for st in stores:
+        sc = set((st.get("cats") or "all").split())
+        if sc & {"all", "general"} or sc & cats:
+            keep.append(st)
+    return keep
+
+
+DEFAULTS = {"region": "Australia", "interval": "60", "currency": "$", "popups": "1", "theme": "light",
+            "auto": "0", "hide_acc": "0", "sort": "Best match", "limited": "0", "browser": "1", "blocked": "ebay", "scope": "smart",
+            "alert_mode": "instant", "quiet_on": "0", "quiet_start": "22", "quiet_end": "7", "summary_hour": "8"}
+ALERT_MIN_SCORE = 50
+SECRET_KEYS = {"discord", "tg_token", "email_pass"}
+
+
+# --------------------------------------------------------------------------- #
+# Database + settings
+# --------------------------------------------------------------------------- #
+def db() -> sqlite3.Connection:
+    con = sqlite3.connect(DB_PATH, timeout=30)
+    con.row_factory = sqlite3.Row
+    con.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS watchlist(
+            id INTEGER PRIMARY KEY, keywords TEXT NOT NULL,
+            max_price REAL, min_drop_pct REAL DEFAULT 10,
+            best_price REAL, best_store TEXT, best_title TEXT, best_url TEXT, checked_at REAL);
+        CREATE TABLE IF NOT EXISTS stores(
+            id INTEGER PRIMARY KEY, name TEXT NOT NULL, region TEXT NOT NULL,
+            search_url TEXT NOT NULL, item TEXT, title TEXT, price TEXT, was_price TEXT, link TEXT,
+            enabled INTEGER DEFAULT 1, status TEXT DEFAULT 'Not tested', tested_at REAL,
+            custom INTEGER DEFAULT 0, UNIQUE(name, region));
+        CREATE TABLE IF NOT EXISTS prices(
+            id INTEGER PRIMARY KEY, item_id INTEGER, store TEXT, url TEXT,
+            title TEXT, price REAL, seen_at REAL);
+        CREATE TABLE IF NOT EXISTS alerts(
+            id INTEGER PRIMARY KEY, item_id INTEGER, keywords TEXT, title TEXT, store TEXT,
+            url TEXT, price REAL, reasons TEXT, sent_at REAL);
+        CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT);
+        CREATE TABLE IF NOT EXISTS picks(
+            id INTEGER PRIMARY KEY, kind TEXT NOT NULL, url TEXT NOT NULL, store TEXT, title TEXT,
+            price REAL, was REAL, pct REAL, image TEXT, source TEXT, expires REAL, votes INTEGER DEFAULT 0,
+            terms TEXT, found_at REAL, basis TEXT DEFAULT 'was', UNIQUE(kind, url));
+        CREATE TABLE IF NOT EXISTS reviews(
+            key TEXT PRIMARY KEY, rating REAL, count INTEGER DEFAULT 0, label TEXT, n INTEGER DEFAULT 0, at REAL);
+        CREATE TABLE IF NOT EXISTS vocab(word TEXT PRIMARY KEY, n INTEGER NOT NULL DEFAULT 1);
+        CREATE TABLE IF NOT EXISTS seen(url TEXT NOT NULL, price REAL NOT NULL, at REAL NOT NULL);
+        CREATE INDEX IF NOT EXISTS seen_url ON seen(url, at);
+        CREATE TABLE IF NOT EXISTS hidden_urls(
+            url TEXT PRIMARY KEY, store TEXT, title TEXT, price REAL, correct REAL, at REAL);
+        CREATE TABLE IF NOT EXISTS feedback(
+            url TEXT PRIMARY KEY, verdict TEXT NOT NULL, terms TEXT, title TEXT, at REAL);
+        """
+    )
+    wcols = [r[1] for r in con.execute("PRAGMA table_info(watchlist)")]
+    for col, ddl in (("paused", "INTEGER DEFAULT 0"), ("ignore_stores", "TEXT DEFAULT ''"),
+                     ("want_stock", "INTEGER DEFAULT 0"), ("had_stock", "INTEGER DEFAULT 1")):
+        if col not in wcols:
+            con.execute(f"ALTER TABLE watchlist ADD COLUMN {col} {ddl}")
+            con.commit()
+    pcols = [r[1] for r in con.execute("PRAGMA table_info(picks)")]
+    if "basis" not in pcols:
+        con.execute("ALTER TABLE picks ADD COLUMN basis TEXT DEFAULT 'was'")
+        con.commit()
+    prcols = [r[1] for r in con.execute("PRAGMA table_info(prices)")]
+    if "reg" not in prcols:
+        con.execute("ALTER TABLE prices ADD COLUMN reg REAL")
+        con.commit()
+    acols = [r[1] for r in con.execute("PRAGMA table_info(alerts)")]
+    if "notified" not in acols:
+        con.execute("ALTER TABLE alerts ADD COLUMN notified INTEGER DEFAULT 1")
+        con.commit()
+    cols = [r[1] for r in con.execute("PRAGMA table_info(stores)")]
+    for col, ddl in (("use_browser", "INTEGER DEFAULT 0"), ("fail_streak", "INTEGER DEFAULT 0"),
+                     ("skip_until", "REAL DEFAULT 0"), ("cats", "TEXT DEFAULT 'all'")):
+        if col not in cols:
+            con.execute(f"ALTER TABLE stores ADD COLUMN {col} {ddl}")
+            con.commit()
+    global _SEEDED
+    if not _SEEDED:
+        seed_catalog(con)
+        con.execute("DELETE FROM seen WHERE at < ?", (time.time() - 400 * 86400,))
+        con.commit()
+        migrate_secrets(con)
+        try:
+            os.chmod(DB_PATH, 0o600)               # your database holds alert settings: keep it private (Mac/Linux)
+        except OSError:
+            pass
+        _SEEDED = True
+    return con
+
+
+_SEEDED = False
+
+
+def seed_catalog(con):
+    """Add any new built-in stores and refresh built-in search URLs (keeps your on/off choices)."""
+    names = [n for lst in CATALOG.values() for n, _ in lst]
+    con.execute("DELETE FROM stores WHERE custom=0 AND (region NOT IN (%s) OR name NOT IN (%s))"
+                % (",".join("?" * len(CATALOG)), ",".join("?" * len(names))), (*CATALOG, *names))
+    for region, stores in CATALOG.items():
+        for name, url in stores:
+            con.execute("INSERT OR IGNORE INTO stores(name,region,search_url,custom) VALUES(?,?,?,0)",
+                        (name, region, url))
+            con.execute("UPDATE stores SET search_url=?, cats=? WHERE name=? AND region=? AND custom=0",
+                        (url, STORE_CATS.get(name, "all"), name, region))
+    con.execute("INSERT OR REPLACE INTO settings VALUES('region','Australia')")   # Australia only
+    con.commit()
+
+
+def reset_catalog(con):
+    con.execute("DELETE FROM stores WHERE custom=0")
+    seed_catalog(con)
+
+
+def _keyring():
+    try:
+        import keyring  # type: ignore
+        keyring.get_keyring()
+        if "fail" in type(keyring.get_keyring()).__module__.lower():
+            return None
+        return keyring
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def secure_store_available() -> bool:
+    return _keyring() is not None
+
+
+def get_settings(con) -> dict:
+    s = dict(DEFAULTS)
+    s.update({r["key"]: r["value"] for r in con.execute("SELECT * FROM settings")})
+    for k in SECRET_KEYS:
+        if str(s.get(k, "")).startswith("keyring:"):
+            kr = _keyring()
+            try:
+                s[k] = (kr.get_password("Deals", k) or "") if kr else ""
+            except Exception:  # noqa: BLE001
+                s[k] = ""
+    return s
+
+
+def migrate_secrets(con):
+    """Move any saved passwords/tokens into the system password store when one is available."""
+    kr = _keyring()
+    if not kr:
+        return
+    for r in con.execute("SELECT key, value FROM settings").fetchall():
+        if r["key"] in SECRET_KEYS and r["value"] and not r["value"].startswith("keyring:"):
+            try:
+                kr.set_password("Deals", r["key"], r["value"])
+                con.execute("UPDATE settings SET value='keyring:1' WHERE key=?", (r["key"],))
+            except Exception:  # noqa: BLE001
+                pass
+    con.commit()
+
+
+def set_setting(con, key: str, value: str):
+    if key in SECRET_KEYS and value and not value.startswith("keyring:"):
+        kr = _keyring()
+        if kr:
+            try:
+                kr.set_password("Deals", key, value)
+                value = "keyring:1"
+            except Exception:  # noqa: BLE001
+                pass
+    if value == "":
+        con.execute("DELETE FROM settings WHERE key=?", (key,))
+    else:
+        con.execute("INSERT OR REPLACE INTO settings VALUES(?,?)", (key, value))
+    con.commit()
+
+
+def active_stores(con, region: str) -> list[dict]:
+    rows = con.execute("SELECT * FROM stores WHERE enabled=1 AND (region=? OR custom=1) ORDER BY name",
+                       (region,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def money(sym: str, v: float) -> str:
+    return f"{sym}{v:,.2f}"
+
+
+# --------------------------------------------------------------------------- #
+# Keywords + matching
+# --------------------------------------------------------------------------- #
+def parse_keywords(text: str) -> tuple[list[str], list[str]]:
+    """'sony wh-1000xm5 "noise cancelling" -case' -> (include terms, exclude terms)"""
+    try:
+        toks = shlex.split(text)
+    except ValueError:
+        toks = text.split()
+    inc, exc = [], []
+    for tok in toks:
+        if tok.startswith("-") and len(tok) > 1:
+            exc.append(tok[1:])
+        else:
+            inc.append(tok)
+    return inc, exc
+
+
+def norm(s: str) -> str:
+    """Lowercase and strip punctuation/spaces so 'WH-1000XM5' matches 'wh1000xm5'."""
+    return re.sub(r"[^a-z0-9]", "", s.lower())
+
+
+def matches(keywords: str, title: str) -> bool:
+    inc, exc = parse_keywords(keywords)
+    t = norm(title)
+    return bool(inc) and all(norm(w) in t for w in inc) and not any(norm(w) in t for w in exc)
+
+
+def search_query(keywords: str) -> str:
+    return " ".join(parse_keywords(keywords)[0])
+
+
+# --------------------------------------------------------------------------- #
+# Scraping
+# --------------------------------------------------------------------------- #
+@dataclass
+class Offer:
+    store: str
+    title: str
+    price: float
+    url: str
+    was_price: float | None = None
+    image: str | None = None
+    score: float = 0.0
+    accessory: bool = False
+    expires: float | None = None      # limited-time deals (OzBargain): unix time the deal ends
+    votes: int = 0                    # OzBargain net votes
+    source: str = "store"             # store | ozb | staticice
+    ref_price: float | None = None    # typical price at other shops (used to show an OzBargain discount)
+    oos: bool = False                 # shown as out of stock / unavailable
+    used: bool = False                # refurbished, ex-demo, open box, grey import...
+    others: list = field(default_factory=list)   # the same product at other stores (set by group_offers)
+
+
+class FetchError(Exception):
+    def __init__(self, kind: str, msg: str):
+        super().__init__(msg)
+        self.kind = kind  # 'blocked' | 'notfound' | 'error'
+
+
+def parse_price(text: str | None) -> float | None:
+    """'$1,299.00' -> 1299.0, '1.299,00 €' -> 1299.0, '1 299' -> 1299.0"""
+    if not text:
+        return None
+    m = re.search(r"\d[\d.,\s]*", text)
+    if not m:
+        return None
+    s = m.group().strip().replace(" ", "").replace("\u00a0", "")
+    if "," in s and "." in s:
+        if s.rfind(",") > s.rfind("."):
+            s = s.replace(".", "").replace(",", ".")
+        else:
+            s = s.replace(",", "")
+    elif "," in s:
+        s = s.replace(",", ".") if re.search(r",\d{1,2}$", s) else s.replace(",", "")
+    try:
+        return float(s.rstrip("."))
+    except ValueError:
+        return None
+
+
+UA_ALT = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) "
+          "Version/17.5 Safari/605.1.15")
+OZB_UA = "DealScraper/1.0 (personal price tracker; reads public RSS feeds)"
+BOT_MARKERS = ("captcha", "access denied", "just a moment", "cf-chl", "px-captcha", "pardon our interruption",
+               "are you a robot", "unusual traffic", "verify you are human", "attention required")
+JS_MARKERS = ('id="__next"', 'id="root"', 'id="app"', "data-reactroot", "__nuxt", "<app-root", "ng-version",
+              "enable javascript", "requires javascript", "you need to enable javascript")
+_SESSION = requests.Session()
+
+
+def fetch(url: str, timeout=(5, 8), accept: str = "text/html,application/xhtml+xml,*/*;q=0.8",
+          ua: str | None = None) -> str:
+    """GET a page. A 403 gets one retry under a different browser identity before we call it blocked.
+    A site that times out is given up on straight away (it won't be faster a second later)."""
+    last = None
+    for attempt, agent in enumerate((ua or UA, UA_ALT)):
+        try:
+            r = _SESSION.get(url, headers={"User-Agent": agent, "Accept": accept,
+                                           "Accept-Language": "en-AU,en;q=0.9"}, timeout=timeout)
+            if r.status_code == 403 and attempt == 0:
+                continue
+            if r.status_code in (401, 403, 429, 503):
+                raise FetchError("blocked", f"HTTP {r.status_code}")
+            if r.status_code == 404:
+                raise FetchError("notfound", "HTTP 404")
+            r.raise_for_status()
+            return r.text
+        except FetchError:
+            raise
+        except requests.Timeout:
+            raise FetchError("error", "timed out")
+        except requests.RequestException as e:      # connection hiccup: one more try
+            last = e
+    raise FetchError("error", str(last)[:80])
+
+
+TRACKERS = ("google-analytics", "googletagmanager", "doubleclick", "googlesyndication", "facebook.net",
+            "facebook.com/tr", "hotjar", "clarity.ms", "segment.io", "segment.com", "newrelic", "nr-data",
+            "tiktok", "pinterest", "criteo", "taboola", "outbrain", "optimizely", "intercom", "zendesk",
+            "livechat", "tawk.to", "bing.com/bat", "snapchat", "klaviyo", "yotpo", "trustpilot")
+
+
+class BrowserEngine:
+    """One shared headless browser (Microsoft Edge / Chrome if installed, else Playwright's Chromium).
+    Pages load with JavaScript like a normal visit, up to 3 at once, from any thread."""
+
+    def __init__(self):
+        self.loop = self.thread = self.browser = self.pw = self.sem = None
+        self.state, self.error, self.channel, self.ua = "idle", "", "", None
+        self.lock, self.ready = threading.Lock(), threading.Event()
+
+    @staticmethod
+    def installed() -> bool:
+        return importlib.util.find_spec("playwright") is not None
+
+    async def _shutdown(self):
+        for closer in (self.browser and self.browser.close, self.pw and self.pw.stop):
+            try:
+                if closer:
+                    await closer()
+            except Exception:  # noqa: BLE001
+                pass
+
+    def reset(self):
+        """Close the browser cleanly (so no stray process is left behind) and allow a fresh start."""
+        loop, thread = self.loop, self.thread
+        if loop and loop.is_running():
+            try:
+                asyncio.run_coroutine_threadsafe(self._shutdown(), loop).result(8)
+            except Exception:  # noqa: BLE001
+                pass
+            loop.call_soon_threadsafe(loop.stop)
+            if thread:
+                thread.join(5)
+        self.browser = self.pw = self.loop = self.thread = None
+        self.state, self.error = "idle", ""
+        self.ready.clear()
+
+    def start(self, wait: bool = True) -> bool:
+        if not self.installed():
+            self.state, self.error = "error", "browser add-on (playwright) is not installed"
+            return False
+        with self.lock:
+            if self.state == "idle":
+                self.state = "starting"
+                self.ready.clear()
+                self.thread = threading.Thread(target=self._run, daemon=True)
+                self.thread.start()
+        if wait:
+            self.ready.wait(90)
+        return self.state == "ready"
+
+    def _run(self):
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        self.loop = loop
+        loop.run_until_complete(self._init())
+        self.ready.set()
+        if self.state == "ready":
+            loop.run_forever()
+            try:
+                loop.run_until_complete(loop.shutdown_asyncgens())
+            finally:
+                loop.close()
+
+    async def _init(self):
+        try:
+            from playwright.async_api import async_playwright
+            self.pw = await async_playwright().start()
+            last = None
+            for channel in ("msedge", "chrome", None):
+                try:
+                    kw = {"headless": True, "args": ["--disable-blink-features=AutomationControlled",
+                                                     "--disable-dev-shm-usage", "--disable-gpu", "--disable-extensions",
+                                                     "--disable-background-networking", "--mute-audio",
+                                                     "--disable-sync", "--no-first-run",
+                                                     "--blink-settings=imagesEnabled=false"]}
+                    if channel:
+                        kw["channel"] = channel
+                    self.browser = await self.pw.chromium.launch(**kw)
+                    self.channel = channel or "chromium"
+                    break
+                except Exception as e:  # noqa: BLE001
+                    last = e
+            if not self.browser:
+                raise last or RuntimeError("no browser could be started")
+            self.ua = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+                       f"Chrome/{self.browser.version} Safari/537.36")
+            self.sem = asyncio.Semaphore(3)
+            self.state = "ready"
+        except Exception as e:  # noqa: BLE001
+            self.state = "error"
+            msg = str(e).strip().splitlines()
+            self.error = ("no browser found - install one from Settings" if "xecutable" in str(e)
+                          else (msg[0][:160] if msg else "browser failed to start"))
+
+    async def _render(self, url: str, timeout: int) -> str:
+        async with self.sem:
+            ctx = await self.browser.new_context(user_agent=self.ua, locale="en-AU", timezone_id="Australia/Sydney",
+                                                 viewport={"width": 1024, "height": 768})
+            try:
+                await ctx.add_init_script("Object.defineProperty(navigator,'webdriver',{get:()=>undefined})")
+                page = await ctx.new_page()
+
+                async def gate(route):                       # skip pictures, fonts and trackers: faster, same prices
+                    req = route.request
+                    if req.resource_type in ("image", "media", "font", "stylesheet") or any(t in req.url for t in TRACKERS):
+                        await route.abort()
+                    else:
+                        await route.continue_()
+
+                await page.route("**/*", gate)
+                await page.goto(url, wait_until="domcontentloaded", timeout=timeout * 1000)
+                try:
+                    await page.wait_for_function(r"document.body && /\$\s?\d/.test(document.body.innerText)",
+                                                 timeout=6000)
+                except Exception:  # noqa: BLE001
+                    pass
+                try:
+                    await page.wait_for_load_state("networkidle", timeout=1500)
+                except Exception:  # noqa: BLE001
+                    pass
+                await page.evaluate("window.scrollTo(0, document.body.scrollHeight / 2)")
+                await page.wait_for_timeout(300)
+                return await page.content()
+            finally:
+                await ctx.close()
+
+    def render(self, url: str, timeout: int = 20) -> str:
+        if not self.start():
+            raise FetchError("nobrowser", self.error or "browser unavailable")
+        fut = asyncio.run_coroutine_threadsafe(self._render(url, timeout), self.loop)
+        try:
+            return fut.result(timeout + 20)
+        except Exception as e:  # noqa: BLE001
+            msg = str(e).strip().splitlines()
+            raise FetchError("error", (msg[0] if msg else "page failed to load")[:80])
+
+
+BROWSER = BrowserEngine()
+atexit.register(lambda: BROWSER.reset() if BROWSER.state == "ready" else None)
+
+
+def browser_wanted(cfg: dict | None) -> bool:
+    return (cfg or {}).get("browser", "1") == "1" and BrowserEngine.installed()
+
+
+def browser_status(cfg: dict | None = None) -> str:
+    """Short text for the UI."""
+    if (cfg or {}).get("browser", "1") != "1":
+        return "off"
+    if not BrowserEngine.installed():
+        return "not installed"
+    return {"ready": "ready", "starting": "starting...", "error": "problem: " + BROWSER.error}.get(BROWSER.state, "ready when needed")
+
+
+def install_browser(log=print) -> tuple[bool, str]:
+    """pip-install Playwright, then use Edge/Chrome if present or download Chromium (~150 MB)."""
+    flags = {"creationflags": 0x08000000} if sys.platform == "win32" else {}
+
+    def run(args):
+        p = subprocess.Popen([sys.executable, "-m", *args], stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                             text=True, **flags)
+        for line in p.stdout:
+            if line.strip():
+                log(line.strip()[:110])
+        return p.wait() == 0
+
+    if not BrowserEngine.installed():
+        log("Installing the browser add-on...")
+        if not (run(["pip", "install", "playwright"]) or run(["pip", "install", "--user", "playwright"])):
+            return False, "pip couldn't install the browser add-on"
+        importlib.invalidate_caches()
+    BROWSER.reset()
+    if BROWSER.start():
+        return True, f"ready (using {BROWSER.channel})"
+    log("No Edge/Chrome found - downloading a browser (about 150 MB)...")
+    if not run(["playwright", "install", "chromium"]):
+        return False, "the browser download failed"
+    BROWSER.reset()
+    return (True, f"ready (using {BROWSER.channel})") if BROWSER.start() else (False, BROWSER.error)
+
+
+_FEED_CACHE: dict = {}
+_FEED_LOCK = threading.Lock()
+
+
+def fetch_cached(url: str, ttl: int = 600, **kw) -> str:
+    """fetch() with a short in-memory cache (also for failures) so feeds aren't hammered."""
+    now = time.time()
+    with _FEED_LOCK:
+        hit = _FEED_CACHE.get(url)
+        if hit and now - hit[0] < ttl:
+            if isinstance(hit[1], FetchError):
+                raise hit[1]
+            return hit[1]
+    try:
+        text = fetch(url, **kw)
+    except FetchError as e:
+        with _FEED_LOCK:
+            _FEED_CACHE[url] = (now, e)
+        raise
+    with _FEED_LOCK:
+        _FEED_CACHE[url] = (now, text)
+    return text
+
+
+def _looks_js(page: str) -> bool:
+    """A page with lots of scripts and almost no visible text is built in the browser."""
+    if any(m in page.lower() for m in JS_MARKERS):
+        return True
+    text = re.sub(r"<(script|style)[^>]*>.*?</\1>", " ", page, flags=re.S | re.I)
+    text = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", text))
+    return page.lower().count("<script") >= 5 and len(text) < 4000
+
+
+def _classify_empty(page: str) -> str | None:
+    """Why did a 200 page contain no products? Bot-check page, or built with JavaScript?"""
+    low = page.lower()
+    if any(m in low for m in BOT_MARKERS):
+        return "botcheck"
+    if any(m in low for m in JS_MARKERS):
+        return "needsjs"
+    return None
+
+
+PRICE_RE = re.compile(r"(?:A\$|AU\$|US\$|\$|£|€)\s?\d[\d,]*(?:\.\d{1,2})?")
+NOISE_RE = re.compile(r"(?i)(?:save|saving|you save|off|was|rrp|from)?\s*(?:\d+\s*(?:x|payments?|instal+ments?)\s*(?:of)?\s*)"
+                      r"(?:A\$|AU\$|US\$|\$|£|€)\s?\d[\d,]*(?:\.\d{1,2})?(?:\s*/\s*(?:mo|month|wk|week|fortnight))?")
+SAVE_RE = re.compile(r"(?i)(?:save|saving|you save)\s*(?:up to)?\s*(?:A\$|AU\$|US\$|\$|£|€)\s?\d[\d,]*(?:\.\d{1,2})?")
+
+
+_CUR = r"(?:A\$|AU\$|US\$|\$|£|€)\s?\d[\d,]*(?:\.\d{1,2})?"
+# "$50 off", "save $50", "extra $20 off", "take $30 off" -> amounts that are NOT the price
+OFF_RE = re.compile(r"(?i)(?:(?:you\s+)?save|saving|take|extra|get|up to)?\s*(?:up to\s*)?" + _CUR + r"\s*(?:off|discount|cashback|cash back|rebate)\b"
+                    + r"|(?:(?:you\s+)?save|saving|save up to|extra|take|cashback|rebate|discount of)\s*" + _CUR)
+# "$25/mo", "$10 per week", "4 payments of $50", "from $12 a month" -> instalments, not prices
+INSTAL_RE = re.compile(r"(?i)(?:\d+\s*(?:x|payments?|instal+ments?|fortnightly payments?)\s*(?:of)?\s*)?" + _CUR
+                       + r"\s*(?:/|per|a|each)\s*(?:mo|month|wk|week|fortnight|fn)\b"
+                       + r"|\d+\s*(?:x|payments?|instal+ments?)\s*(?:of)?\s*" + _CUR)
+
+
+# "Bonus $100 gift card", "free $50 voucher", "$20 delivery", "spend $500", "from $9/week" etc. are not the price
+GIFT_RE = re.compile(
+    r"(?i)(?:(?:bonus|free|get|receive|claim|plus|earn|win|includes?|with|extra)\s+)*" + _CUR + r"\s*(?:bonus\s*)?"
+    r"(?:e-?gift\s*cards?|gift\s*cards?|gift\s*vouchers?|vouchers?|store\s*credit|credit|prepaid|cashback|cash\s*back|"
+    r"rebate|reward|rewards|points|bonus|gift|coupon|trade[- ]?in|delivery|shipping|postage|freight|installation|"
+    r"back|to spend|value|worth)\b"
+    r"|(?:e-?gift\s*cards?|gift\s*cards?|vouchers?|store\s*credit|credit|cashback|cash\s*back|rebate|rewards?|bonus|gift|"
+    r"trade[- ]?in|delivery|shipping|postage|freight|installation|spend|min(?:imum)?\.?\s*spend|orders? over|"
+    r"worth|valued? at|value of|up to|from only|afterpay|zip(?:pay)?|klarna|humm|interest[- ]?free)\W{0,12}" + _CUR,
+)
+
+
+def _drop_savings(vals: list[float]) -> list[float]:
+    """vals sorted ascending. Remove an amount that is really the saving (was - now), not a price."""
+    if len(vals) == 3:
+        a, b, c = vals
+        if abs((c - b) - a) <= 0.02 + 0.005 * c:
+            return [b, c]
+    if len(vals) == 2 and vals[0] < 0.2 * vals[1]:
+        return vals[1:]
+    return vals
+
+
+def _pick_prices(text: str) -> list[float]:
+    text = GIFT_RE.sub(" ", INSTAL_RE.sub(" ", OFF_RE.sub(" ", SAVE_RE.sub(" ", NOISE_RE.sub(" ", text)))))
+    vals = sorted({parse_price(p) for p in PRICE_RE.findall(text)} - {None})
+    return _drop_savings([v for v in vals if v > 0])
+
+
+_SKIP_UP = {"body", "html", "main", "header", "footer", "nav", "[document]"}
+_DROP_TAGS = ("script", "style", "noscript", "template", "svg", "iframe")
+
+
+def _capped_text(node, limit: int = 700) -> str | None:
+    parts, n = [], 0
+    for t in node.stripped_strings:
+        n += len(t) + 1
+        if n > limit:
+            return None
+        parts.append(t)
+    return " ".join(parts)
+
+
+def make_soup(page: str) -> BeautifulSoup:
+    """Parse with lxml when installed (several times faster than html.parser); cap huge pages."""
+    if len(page) > 1_500_000:
+        page = page[:1_500_000]
+    try:
+        import lxml  # noqa: F401
+        soup = BeautifulSoup(page, "lxml")
+    except Exception:  # noqa: BLE001
+        soup = BeautifulSoup(page, "html.parser")
+    return soup
+
+
+USED_RE = re.compile(r"(?i)\b(?:refurb(?:ished)?|pre-?owned|second[- ]?hand|used|open[- ]?box|renewed|ex[- ]?demo|ex[- ]?display|"
+                     r"reconditioned|grey import|gray import|parallel import|international (?:version|model|stock))\b")
+OOS_RE = re.compile(r"(?i)out of stock|sold out|currently unavailable|temporarily unavailable|notify me when|back[- ]?order|"
+                    r"coming soon|no longer available|discontinued|unavailable online")
+
+
+def _first_image(v, base: str) -> str | None:
+    if isinstance(v, list):
+        v = v[0] if v else None
+    if isinstance(v, dict):
+        v = v.get("url") or v.get("contentUrl")
+    if isinstance(v, str) and v.strip() and not v.startswith("data:"):
+        return urljoin(base, v.strip())
+    return None
+
+
+_NOT_PHOTO = re.compile(r"(?i)placeholder|blank\.|spacer|loading|pixel|1x1|transparent|no[-_]?image|noimage|default[-_]?image|"
+                        r"spinner|lazy\.(?:gif|png)|data:image|\.gif(?:$|\?)")
+_NOT_PRODUCT = re.compile(r"(?i)logo|icon|badge|sprite|flag|star|rating|payment|afterpay|zippay|klarna|paypal|banner|"
+                          r"promo|award|trustpilot|swatch|avatar")
+
+
+def _best_srcset(ss: str, base: str) -> str | None:
+    best, best_w = None, -1
+    for part in ss.split(","):
+        bits = part.strip().split()
+        if not bits or bits[0].startswith("data:"):
+            continue
+        w = 0
+        if len(bits) > 1:
+            try:
+                w = int(float(bits[1].rstrip("wx")) * (1000 if bits[1].endswith("x") else 1))
+            except ValueError:
+                w = 0
+        if w >= best_w:
+            best, best_w = bits[0], w
+    return urljoin(base, best) if best else None
+
+
+def _img_url(img, base: str) -> str | None:
+    if img is None:
+        return None
+    cands = []
+    pic = img.find_parent("picture")                   # (lxml nests <img> inside <source>, so look up the tree)
+    if pic is not None:
+        for src in pic.find_all("source", limit=3):
+            u = _best_srcset(src.get("srcset") or src.get("data-srcset") or "", base)
+            if u:
+                cands.append(u)
+    for attr in ("data-src", "data-lazy-src", "data-original", "data-lazy", "data-image", "data-img", "data-hi-res-src"):
+        v = (img.get(attr) or "").strip()
+        if v and not v.startswith("data:"):
+            cands.append(urljoin(base, v))
+    ss = (img.get("data-srcset") or img.get("srcset") or "").strip()
+    if ss:
+        u = _best_srcset(ss, base)
+        if u:
+            cands.append(u)
+    v = (img.get("src") or "").strip()
+    if v and not v.startswith("data:"):
+        cands.append(urljoin(base, v))
+    for u in cands:
+        path = u.lower().split("?")[0]
+        if path.endswith(".svg") or _NOT_PHOTO.search(u):
+            continue
+        return u
+    return None
+
+
+def _card_image(a, node, base: str) -> str | None:
+    """The product photo for a card: skips logos, badges, rating stars and placeholder pixels."""
+    seen = set()
+    for scope in (a, node):
+        for img in scope.find_all("img", limit=8):
+            if id(img) in seen:
+                continue
+            seen.add(id(img))
+            hint = " ".join([" ".join(img.get("class") or []), img.get("alt") or "", img.get("id") or ""])
+            u = _img_url(img, base)
+            if u and not _NOT_PRODUCT.search(hint) and not _NOT_PRODUCT.search(u.rsplit("/", 1)[-1]):
+                return u
+    return None
+
+
+_PAGE_IMG: dict[str, str | None] = {}
+
+
+def page_image(url: str) -> str | None:
+    """The main picture of a product page (og:image / schema.org image). Used when a card has no usable photo."""
+    if url in _PAGE_IMG:
+        return _PAGE_IMG[url]
+    out = None
+    try:
+        page = fetch(url, timeout=(4, 7))[:600_000]
+        m = (re.search(r'(?i)<meta[^>]+property=["\']og:image(?::secure_url)?["\'][^>]*content=["\']([^"\']+)', page)
+             or re.search(r'(?i)<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:image', page)
+             or re.search(r'(?i)<meta[^>]+name=["\']twitter:image["\'][^>]*content=["\']([^"\']+)', page))
+        if m:
+            out = urljoin(url, _html.unescape(m.group(1)))
+        else:
+            m = re.search(r'(?is)"image"\s*:\s*(?:\[\s*)?"([^"]+)"', page)
+            if m:
+                out = urljoin(url, m.group(1).replace("\\/", "/"))
+    except FetchError:
+        pass
+    if len(_PAGE_IMG) > 2000:
+        _PAGE_IMG.clear()
+    _PAGE_IMG[url] = out
+    return out
+
+
+def review_links(o: Offer) -> list[tuple[str, str]]:
+    """Places to read reviews of this product."""
+    q = keywords_from_title(o.title) or o.title[:60]
+    return [("This store's product page", o.url),
+            ("ProductReview.com.au", "https://www.productreview.com.au/search?q=" + quote_plus(q)),
+            ("Reddit discussions", "https://www.reddit.com/search/?q=" + quote_plus(q + " review")),
+            ("Google: reviews in Australia", "https://www.google.com/search?q=" + quote_plus(q + " review australia"))]
+
+
+def _jsonld_offers(soup: BeautifulSoup, base_url: str, store: str) -> list[Offer]:
+    out: list[Offer] = []
+
+    def walk(n):
+        if isinstance(n, list):
+            for x in n:
+                walk(x)
+            return
+        if not isinstance(n, dict):
+            return
+        t = n.get("@type")
+        if "Product" in (t if isinstance(t, list) else [t]) and n.get("name"):
+            offers = n.get("offers") or []
+            price, url = None, n.get("url")
+            for o in offers if isinstance(offers, list) else [offers]:
+                if not isinstance(o, dict):
+                    continue
+                v = o.get("price", o.get("lowPrice"))
+                price = parse_price(str(v)) if v is not None else None
+                url = url or o.get("url")
+                if price:
+                    break
+            if price and url:
+                avail = " ".join(str(o.get("availability", "")) for o in (offers if isinstance(offers, list) else [offers])
+                                 if isinstance(o, dict))
+                out.append(Offer(store, str(n["name"]), price, urljoin(base_url, url),
+                                 image=_first_image(n.get("image"), base_url),
+                                 oos=bool(re.search(r"(?i)outofstock|soldout|discontinued|unavailable", avail))))
+        for v in n.values():
+            if isinstance(v, (dict, list)):
+                walk(v)
+
+    for tag in soup.find_all("script", type="application/ld+json"):
+        try:
+            walk(json.loads(tag.get_text()))
+        except (json.JSONDecodeError, TypeError):
+            pass
+    return out
+
+
+_BADGE_TXT = re.compile(r"(?i)\b(?:bonus|free|get)\b[^|]{0,30}?(?:gift\s*cards?|vouchers?|e-?gift)\b|\b(?:new|sale|hot|clearance|"
+                        r"online only|limited time|best seller|exclusive)\b(?=\s)")
+
+
+def _best_title(node, a) -> str | None:
+    cands = [a.get("title"), a.get("aria-label")]
+    for h in node.find_all(["h1", "h2", "h3", "h4", "h5"], limit=2):
+        cands.append(h.get_text(" ", strip=True))
+    img = a.find("img")
+    if img:
+        cands.append(img.get("alt"))
+    cands.append(a.get_text(" ", strip=True))
+    for t in cands:
+        t = _BADGE_TXT.sub("", PRICE_RE.sub("", (t or ""))).strip(" -|:")
+        t = re.sub(r"\s{2,}", " ", t)
+        if 8 <= len(t) <= 200:
+            return t
+    return None
+
+
+_P_CLASS = re.compile(r"(?i)price|amount|\bnow\b|special|sale|final|current")
+_P_WAS = re.compile(r"(?i)\b(?:was|old|rrp|regular|original|orig|compare|list|strike|before|previous|msrp|retail)")
+_P_BAD = re.compile(r"(?i)save|saving|discount|off\b|instal|afterpay|zip|klarna|humm|gift|bonus|badge|label|promo|offer|"
+                    r"reward|points|cashback|rebate|delivery|shipping|finance|per[-_ ]?(?:week|month)|monthly|weekly|"
+                    r"trade|voucher|credit|flag|ribbon|sticker|tag\b|callout|banner")
+
+
+def _structured_price(node) -> tuple[float | None, float | None]:
+    """(price, was) read from elements the shop itself marks as price (itemprop, data-price, class='...price...').
+    Skips badges, gift cards, instalments and savings. (None, None) when the card doesn't say."""
+    now, was = [], []
+    for el in node.find_all(True):
+        if el.name in ("script", "style"):
+            continue
+        cls = " ".join(el.get("class") or []) + " " + (el.get("id") or "")
+        ip = (el.get("itemprop") or "").lower()
+        data = el.get("data-price") or el.get("data-price-amount") or el.get("data-product-price")
+        if ip == "price" or data:
+            v = parse_price(str(el.get("content") or data or el.get_text(" ", strip=True)))
+            if v and v > 0:
+                now.insert(0, v)                       # explicit machine-readable price wins
+            continue
+        if not cls.strip() or not _P_CLASS.search(cls):
+            continue
+        if _P_BAD.search(cls):
+            continue
+        bad = False
+        for p in el.parents:                           # inside a badge / gift-card / instalment wrapper?
+            if p is node:
+                break
+            if _P_BAD.search(" ".join(p.get("class") or [])):
+                bad = True
+                break
+        if bad:
+            continue
+        if el.find(True, class_=_P_CLASS):             # a wrapper: its children are read on their own
+            continue
+        txt = el.get_text(" ", strip=True)
+        if len(txt) > 40:
+            continue
+        v = parse_price(txt)
+        if not v or v <= 0 or (len(PRICE_RE.findall(txt)) > 1 and not _P_WAS.search(cls)):
+            continue
+        is_was = bool(_P_WAS.search(cls)) or el.name in ("del", "s", "strike") or any(
+            p.name in ("del", "s", "strike") for p in el.parents if p is not node)
+        (was if is_was else now).append(v)
+    price = now[0] if now else None
+    wasv = next((w for w in was if price and w > price * 1.02), None)
+    return price, wasv
+
+
+def _heuristic_offers(soup: BeautifulSoup, base_url: str, store: str) -> list[Offer]:
+    """Fallback for stores with no structured data: start from each price on the page and walk up to its card."""
+    out: list[Offer] = []
+    seen: set[str] = set()
+    done: set[int] = set()
+    for tag in soup.find_all(_DROP_TAGS):
+        tag.decompose()
+    for s in soup.find_all(string=PRICE_RE):
+        node = s.parent
+        for _ in range(7):
+            if node is None or node.name in _SKIP_UP:
+                break
+            if id(node) in done:
+                break
+            text = _capped_text(node)
+            if text is None:
+                break
+            links = node.find_all("a", href=True)
+            hrefs = {l["href"].split("?")[0] for l in links}
+            if not links:
+                node = node.parent
+                continue
+            vals = _pick_prices(text)
+            if not vals:
+                node = node.parent
+                continue
+            if len(hrefs) > 4 or len(vals) > 3:
+                break
+            sp, sw = _structured_price(node)
+            if sp:                                     # the shop's own price wins; the "was" price comes from its markup
+                if not sw:                             # or, failing that, from the card's text (e.g. <s>$1,999</s>, "RRP $2,299")
+                    above = [v for v in vals if sp * 1.02 < v <= sp * 4]
+                    sw = max(above) if above else None
+                vals = sorted({sp, *([sw] if sw else [])})
+            done.add(id(node))
+            a = next((l for l in links if l["href"].strip() and not l["href"].strip().startswith(("#", "javascript:", "mailto:", "tel:"))), None)
+            if a is None:
+                break
+            title = _best_title(node, a)
+            url = urljoin(base_url, a["href"].strip())
+            if title and url not in seen:
+                seen.add(url)
+                was = vals[-1] if len(vals) > 1 and vals[-1] > vals[0] * 1.02 else None
+                out.append(Offer(store, title, vals[0], url, was,
+                                 image=_card_image(a, node, base_url),
+                                 oos=bool(OOS_RE.search(text))))
+            break
+    return out
+
+
+def _selector_offers(soup: BeautifulSoup, base_url: str, store: dict) -> list[Offer]:
+    out = []
+    for card in soup.select(store["item"]):
+        t = card.select_one(store["title"])
+        p = card.select_one(store["price"])
+        a = card.select_one(store.get("link") or "a")
+        price = parse_price(p.get_text(" ", strip=True) if p else None)
+        if not (t and price and a and a.get("href")):
+            continue
+        was = None
+        if store.get("was_price"):
+            w = card.select_one(store["was_price"])
+            was = parse_price(w.get_text(" ", strip=True) if w else None)
+        out.append(Offer(store["name"], t.get_text(" ", strip=True), price,
+                         urljoin(base_url, a["href"]), was, image=_img_url(card.select_one("img"), base_url)))
+    return out
+
+
+# ---- OzBargain: public RSS feeds (the site asks bots to avoid its /search/ and /goto/ pages) ----
+OZB_BASE = "https://www.ozbargain.com.au"
+_PRICE_T = re.compile(r"\$\s?(\d[\d,]*(?:\.\d{1,2})?)")
+_WAS_T = re.compile(r"(?i)(?:rrp|was|normally|usually|valued at|reg(?:ular)?)\s*(?:price\s*)?(?:of\s*)?A?\$\s?(\d[\d,]*(?:\.\d{1,2})?)")
+
+
+def _local(tag: str) -> str:
+    return tag.rsplit("}", 1)[-1]
+
+
+def _slug(words: list[str]) -> str:
+    return "-".join(w for w in (re.sub(r"[^a-z0-9]+", "", x.lower()) for x in words) if w)
+
+
+def _parse_expiry(v: str | None) -> float | None:
+    if not v:
+        return None
+    v = v.strip()
+    try:
+        if v.isdigit():
+            n = float(v)
+            return n / 1000 if n > 1e11 else n
+        return datetime.fromisoformat(v.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        pass
+    try:
+        return parsedate_to_datetime(v).timestamp()
+    except Exception:  # noqa: BLE001
+        pass
+    m = re.match(r"(\d{4})-(\d{2})-(\d{2})", v)
+    return datetime(int(m[1]), int(m[2]), int(m[3]), 23, 59, 59).timestamp() if m else None
+
+
+def _num(v: str) -> float | None:
+    try:
+        return float(v.replace(",", ""))
+    except ValueError:
+        return None
+
+
+def parse_ozb_feed(xml_text: str, now: float | None = None) -> list[Offer]:
+    """Live OzBargain deals from an RSS feed. Expired deals are dropped; expiry/votes are kept."""
+    now = now or time.time()
+    try:
+        root = ET.fromstring(xml_text)
+    except ET.ParseError:
+        return []
+    out: list[Offer] = []
+    for item in root.iter("item"):
+        title = link = ""
+        meta: dict = {}
+        expired, image = False, None
+        for ch in item:
+            ln = _local(ch.tag)
+            if ln == "title":
+                title = _html.unescape((ch.text or "").strip())
+            elif ln == "link":
+                link = (ch.text or "").strip()
+            elif ln == "meta":
+                meta = dict(ch.attrib)
+            elif ln == "title-msg" and ch.attrib.get("type") == "expired":
+                expired = True
+            elif ln in ("content", "thumbnail", "enclosure") and ch.attrib.get("url") and not image:
+                image = ch.attrib["url"]
+        expiry = _parse_expiry(meta.get("expiry"))
+        if not title or not link or expired or (expiry and expiry < now):
+            continue
+        was = None
+        wm = _WAS_T.search(title)
+        if wm:
+            was = _num(wm.group(1))
+        plain = SAVE_RE.sub("", _WAS_T.sub("", title))
+        pm = _PRICE_T.search(plain)
+        price = _num(pm.group(1)) if pm else None
+        if not price:
+            continue                                   # e.g. "20% off sitewide" - no item price to compare
+        merchant = re.search(r"@\s*([^@]+?)\s*$", title)
+        store = "OzBargain: " + (merchant.group(1)[:28] if merchant else "deal")
+        try:
+            votes = int(meta.get("votes-pos", 0)) - int(meta.get("votes-neg", 0))
+        except ValueError:
+            votes = 0
+        out.append(Offer(store, title, price, link, was if was and was > price else None,
+                         image=meta.get("image") or image, expires=expiry, votes=votes, source="ozb"))
+    return out
+
+
+def scrape_ozb(store: dict, query: str, full: str | None = None) -> list[Offer]:
+    terms = [t for t in parse_keywords(full or query)[0] if t.lower() not in STOP]
+    slug = _slug(terms)
+    feeds = [f"{OZB_BASE}/deals/feed"]
+    if slug:
+        feeds += [f"{OZB_BASE}/tag/{slug}/feed", f"{OZB_BASE}/product/{slug}/feed"]
+    for t in terms[:3]:
+        one = _slug([t])
+        if len(one) >= 3 and not one.isdigit() and one != slug:
+            feeds.append(f"{OZB_BASE}/tag/{one}/feed")
+    out, seen, ok, last = [], set(), False, None
+    for url in dict.fromkeys(feeds):
+        try:
+            text = fetch_cached(url, ttl=600, accept="application/rss+xml,application/xml,text/xml,*/*", ua=OZB_UA)
+        except FetchError as e:
+            last = e                                   # an unknown tag is a normal 404 - keep going
+            continue
+        ok = True
+        for o in parse_ozb_feed(text):
+            if o.url not in seen:
+                seen.add(o.url)
+                out.append(o)
+    if not ok and last:
+        raise last
+    return out
+
+
+# ---- StaticICE: Australian price comparison across 200+ retailers (plain server-rendered HTML) ----
+def _staticice_offers(page: str, base_url: str) -> list[Offer]:
+    soup = make_soup(page)
+    out, seen = [], set()
+    for a in soup.find_all("a", href=True):
+        href = a["href"]
+        if "redirect.cgi" not in href or "linkid=2" not in href or not a.get_text(strip=True).startswith("$"):
+            continue
+        q = parse_qs(urlparse(href).query)
+        url = (q.get("newurl") or [""])[0]
+        merchant = (q.get("name") or ["StaticICE"])[0]
+        price = parse_price(a.get_text(strip=True))
+        if not price or not url.startswith("http") or url in seen:
+            continue
+        parts = []
+        for el in a.next_elements:                     # description = text between price link and store link
+            if getattr(el, "name", None) == "a" and "redirect.cgi" in (el.get("href") or ""):
+                break
+            if el.name is None and not any(par is a for par in el.parents):
+                t = str(el).strip()
+                if t:
+                    parts.append(t)
+        desc = " ".join(parts).strip()
+        if not desc:
+            m = re.search(r"latest price for (.+?)(?:\.\.\.)?$", a.get("title", ""))
+            desc = m.group(1) if m else ""
+        if desc:
+            seen.add(url)
+            out.append(Offer(merchant, desc, price, url, source="staticice"))
+    return out
+
+
+def _parse_store_page(page: str, url: str, store: dict) -> list[Offer]:
+    soup = make_soup(page)
+    if store.get("item"):
+        return _selector_offers(soup, url, store)
+    return _jsonld_offers(soup, url, store["name"]) or _heuristic_offers(soup, url, store["name"])
+
+
+def scrape_store(store: dict, query: str, cfg: dict | None = None, full: str | None = None) -> list[Offer]:
+    """All products found for `query` (before relevance ranking). Raises FetchError(kind) with the reason.
+    Stores that block plain requests or build their pages with JavaScript are loaded in a real browser."""
+    tpl, cfg = store["search_url"], cfg or {}
+    if tpl.startswith("ozb:"):
+        return scrape_ozb(store, query, full)
+    if "staticice." in tpl:
+        inc, exc = parse_keywords(full or query)
+        url = tpl.replace("{query}", quote_plus(" ".join(inc + ["-" + x for x in exc] + ["links:30"])))
+        page = fetch(url)
+        offers = _staticice_offers(page, url)
+        if not offers and _classify_empty(page):
+            raise FetchError(_classify_empty(page), "no products")
+        return offers
+
+    url = tpl.replace("{query}", quote_plus(query))
+    use_b, rendered = browser_wanted(cfg), False
+    if store.get("use_browser") and use_b:
+        page, rendered = BROWSER.render(url), True
+    else:
+        try:
+            page = fetch(url)
+        except FetchError as e:
+            if e.kind != "blocked" or not use_b:
+                raise
+            page, rendered = BROWSER.render(url), True            # blocked for scripts: try as a real browser
+    offers = _parse_store_page(page, url, store)
+    if not offers and not rendered:
+        kind = _classify_empty(page) or ("needsjs" if _looks_js(page) else None)
+        if kind:
+            if not use_b:
+                raise FetchError("needsjs" if kind == "needsjs" else kind, kind)
+            page, rendered = BROWSER.render(url), True
+            offers = _parse_store_page(page, url, store)
+    if not offers:
+        kind = _classify_empty(page)
+        if kind:
+            raise FetchError(kind, kind)
+    if rendered and offers:
+        store["_browser_used"] = True
+    return offers
+
+
+_HOST_SEMS: dict = {}
+_HOST_LOCK = threading.Lock()
+_SCAN_CACHE: dict = {}
+_SITE_FAIL: dict = {}
+SCAN_TTL = 300
+FAIL_TTL = 90           # a site that just failed isn't asked again for other watchlist items within 90 seconds          # the same search at the same store within 5 minutes is answered from memory
+
+
+def _host_sem(store: dict):
+    """At most 2 requests at a time to any one site, however many items are being checked."""
+    host = urlparse(store["search_url"].replace("{query}", "x")).netloc or store["name"]
+    with _HOST_LOCK:
+        return _HOST_SEMS.setdefault(host, threading.Semaphore(2))
+
+
+def _scan_one(store: dict, keywords: str, cfg: dict | None = None):
+    key = (store["search_url"], keywords, (cfg or {}).get("browser", "1"))
+    now = time.time()
+    with _HOST_LOCK:
+        hit = _SCAN_CACHE.get(key)
+    if hit and now - hit[0] < SCAN_TTL:
+        store["_browser_used"] = hit[3]
+        return store, [replace(o) for o in hit[1]], hit[2]
+    host = urlparse(store["search_url"].replace("{query}", "x")).netloc
+    with _HOST_LOCK:
+        bad = _SITE_FAIL.get(host)
+    if bad and now - bad[0] < FAIL_TTL:
+        return store, [], bad[1]
+    err, offers = None, []
+    with _host_sem(store):
+        with _HOST_LOCK:                                  # it may have failed while we waited our turn
+            bad = _SITE_FAIL.get(host)
+        if bad and time.time() - bad[0] < FAIL_TTL:
+            err = bad[1]
+        else:
+            try:
+                offers = scrape_store(store, search_query(keywords), cfg, keywords)
+                if store.get("_browser_used") and not store.get("use_browser") and store.get("id"):
+                    try:
+                        con = db()
+                        con.execute("UPDATE stores SET use_browser=1 WHERE id=?", (store["id"],))
+                        con.commit()
+                        store["use_browser"] = 1
+                    except Exception:  # noqa: BLE001
+                        pass
+            except FetchError as e:
+                err = e.kind
+            except Exception:  # noqa: BLE001
+                err = "error"
+    with _HOST_LOCK:
+        if len(_SCAN_CACHE) > 400:
+            _SCAN_CACHE.clear()
+        _SCAN_CACHE[key] = (now, [replace(o) for o in offers], err, bool(store.get("_browser_used")))
+        if err in ("blocked", "notfound", "error", "botcheck", "needsjs", "nobrowser"):
+            _SITE_FAIL[host] = (time.time(), err)
+    return store, offers, err
+
+
+STATUS_LABELS = {"blocked": "Blocked by site (bot protection)", "notfound": "Search URL not found",
+                 "botcheck": "Bot-check page shown", "needsjs": "Needs JavaScript - turn on browser mode",
+                 "nobrowser": "Browser engine unavailable"}
+
+
+def status_text(raw_count: int, err: str | None, via_browser: bool = False) -> str:
+    if err:
+        return STATUS_LABELS.get(err, "Error / unreachable")
+    if not raw_count:
+        return "No products found"
+    return f"Working via browser ({raw_count} products)" if via_browser else f"Working ({raw_count} products)"
+
+
+def status_mark(status: str) -> str:
+    """v = working, - = untested, x = failing"""
+    return "v" if status.startswith("Working") else "-" if status in ("Not tested", "") else "x"
+
+
+# --------------------------------------------------------------------------- #
+# Relevance ranking (Google-style): partial matches allowed, accessories pushed down
+# --------------------------------------------------------------------------- #
+STOP = {"the", "a", "an", "and", "or", "of", "with", "for", "new", "in", "to", "on"}
+STRONG_ACC = {"band", "bands", "strap", "straps", "wristband", "wristbands", "protector", "protectors",
+              "replacement", "refill", "refills", "compatible", "lanyard", "buckle", "tempered"}
+WEAK_ACC = {"case", "cases", "cover", "covers", "skin", "sleeve", "pouch", "stand", "mount", "holder",
+            "dock", "cable", "cord", "charger", "adapter", "film", "clip", "box", "winder", "bracket",
+            "tray", "bag"}
+CUT = {"with", "w", "incl", "includes", "including", "plus", "bundle"}   # "...Watch with Sport Band"
+FOR = {"for", "compatible"}                                              # "Band for Apple Watch"
+
+
+SYNONYMS = {"band": ["strap", "wristband"], "strap": ["band", "wristband"], "wristband": ["band", "strap"],
+            "laptop": ["notebook"], "notebook": ["laptop"], "tv": ["television"], "television": ["tv"],
+            "phone": ["smartphone"], "smartphone": ["phone"], "earbuds": ["earphones"], "earphones": ["earbuds"],
+            "headphones": ["headphone"], "headphone": ["headphones"]}
+
+
+def tokens(s: str) -> list[str]:
+    return re.findall(r"[a-z0-9]+", s.lower())
+
+
+def _has_digit(s: str) -> bool:
+    return any(ch.isdigit() for ch in s)
+
+
+def _term_index(term: str, toks: list[str]) -> int:
+    nt = norm(term)
+    if not nt:
+        return -1
+    digits = _has_digit(nt)
+    for i, t in enumerate(toks):
+        if t == nt:
+            return i
+        if not digits and t in ("smart" + nt, "wrist" + nt):   # smartwatch, wristwatch, smartphone
+            return i
+        if not digits and len(nt) >= 3 and t.startswith(nt):
+            return i
+        if not digits and len(t) >= 3 and nt.startswith(t) and len(nt) - len(t) <= 2:
+            return i
+    for i in range(len(toks)):           # 'wh-1000xm5' -> tokens 'wh' + '1000xm5'
+        cat = ""
+        for j in range(i, min(i + 4, len(toks))):
+            cat += toks[j]
+            if cat == nt:
+                return i
+            if len(cat) >= len(nt):
+                break
+    return -1
+
+
+MODEL_ALIASES = {"ps5": ["playstation5"], "ps4": ["playstation4"], "xsx": ["seriesx"], "xss": ["seriess"]}
+
+
+def _model_index(term: str, prev: str | None, toks: list[str]) -> int:
+    """Find a model number such as '6' in a title written 'Watch 6', 'Watch6' or '6th'.
+    Different numbers never match: '6' does not match 'Watch5', 'iPhone 16' or 'Series 8'."""
+    nt = norm(term)
+    if prev and not _has_digit(prev):                  # "watch" + "6" -> the title word "watch6"
+        i = _term_index(norm(prev) + nt, toks)
+        if i >= 0:
+            return i
+    for alt in MODEL_ALIASES.get(nt, []):
+        i = _term_index(alt, toks)
+        if i >= 0:
+            return i
+    if nt.isdigit():                                   # "2" -> "2nd gen"
+        for i, t in enumerate(toks):
+            if re.fullmatch(nt + r"(st|nd|rd|th)", t):
+                return i
+    return -1
+
+
+def _acc_kind(t: str) -> int:
+    if t in STRONG_ACC:
+        return 2
+    if t in WEAK_ACC:
+        return 1
+    for suf in ("band", "bands", "strap", "straps"):
+        if t.endswith(suf) and len(t) > len(suf) + 2:
+            return 2
+    for suf in ("case", "cases", "cover", "covers"):
+        if t.endswith(suf) and len(t) > len(suf) + 2:
+            return 1
+    return 0
+
+
+BRANDS = {
+    "apple", "samsung", "sony", "bose", "lg", "dell", "hp", "lenovo", "asus", "acer", "msi", "microsoft",
+    "google", "amazon", "logitech", "razer", "corsair", "jbl", "sennheiser", "anker", "garmin", "fitbit",
+    "casio", "fossil", "seiko", "citizen", "huawei", "xiaomi", "oneplus", "nokia", "motorola", "nintendo",
+    "canon", "nikon", "fujifilm", "gopro", "dji", "panasonic", "philips", "dyson", "lego", "tcl", "hisense",
+    "sharp", "toshiba", "seagate", "sandisk", "kingston", "nvidia", "amd", "intel", "tplink", "netgear",
+    "ubiquiti", "belkin", "ugreen", "baseus", "oppo", "realme", "beats", "skullcandy", "sonos", "jabra",
+    "tissot", "timex", "withings", "suunto", "coros", "amazfit", "ticwatch", "mobvoi", "benq", "viewsonic",
+    "aoc", "gigabyte", "asrock", "evga", "steelseries", "hyperx", "elgato", "wacom", "brother", "epson",
+    "roborock", "eufy", "arlo", "wyze", "tapo", "ecovacs", "breville", "nespresso", "delonghi", "kogan",
+}
+# product-line words that imply a brand ("iphone" -> Apple)
+BRAND_ALIASES = {
+    "iphone": "apple", "ipad": "apple", "macbook": "apple", "airpods": "apple", "airpod": "apple",
+    "imac": "apple", "airtag": "apple", "galaxy": "samsung", "pixel": "google", "kindle": "amazon",
+    "alexa": "amazon", "playstation": "sony", "ps5": "sony", "ps4": "sony",
+    "xbox": "microsoft", "thinkpad": "lenovo", "ideapad": "lenovo",
+    "rog": "asus", "zenbook": "asus", "vivobook": "asus", "inspiron": "dell", "xps": "dell", "alienware": "dell", "forerunner": "garmin", "fenix": "garmin", "vivoactive": "garmin", "gshock": "casio",
+    "airpodspro": "apple", "quietcomfort": "bose", "walkman": "sony", "bravia": "sony", }
+
+
+def _query_brand_groups(kept: list[str]) -> list[str]:
+    """Brand words the title must contain (any one) - empty when the search names no brand."""
+    accept: list[str] = []
+    for t in kept:
+        n = norm(t)
+        if n in BRANDS:
+            accept.append(n)
+        elif n in BRAND_ALIASES:
+            accept += [BRAND_ALIASES[n], n]
+    return accept
+
+
+def query_brands(keywords: str) -> list[str]:
+    """Brands named (or implied) by the search, for display, e.g. ['Apple']."""
+    kept = [t for t in parse_keywords(keywords)[0] if t.lower() not in STOP]
+    out: list[str] = []
+    for t in kept:
+        n = norm(t)
+        b = n if n in BRANDS else BRAND_ALIASES.get(n)
+        if b and b.title() not in out:
+            out.append(b.title() if b not in ("lg", "hp", "msi", "tcl", "aoc", "amd", "dji", "jbl") else b.upper())
+    return out
+
+
+def rank_offers(keywords: str, offers: list[Offer]) -> list[Offer]:
+    """Score every offer for relevance to the keywords (0-100), flag accessories, sort best first."""
+    terms, excl = parse_keywords(keywords)
+    kept = [t for t in terms if t.lower() not in STOP] or terms
+    if not kept:
+        return []
+    qtoks = set(tokens(" ".join(kept)))
+    brand_ok = _query_brand_groups(kept)               # empty = no brand named, show every brand
+    shopping_acc = any(_acc_kind(t) for t in qtoks)   # "watch band": accessories are what they want
+    weights = [2 if _has_digit(t) else 1 for t in kept]
+    cands, seen = [], set()
+    for o in offers:
+        if o.url in seen:
+            continue
+        seen.add(o.url)
+        nt = norm(o.title)
+        if any(norm(x) and norm(x) in nt for x in excl):
+            continue
+        toks = tokens(o.title)
+        if not toks:
+            continue
+        if brand_ok and not any(_term_index(b, toks) >= 0 for b in brand_ok):
+            continue                                   # a different brand - not what was searched for
+        idxs = []
+        for k, t in enumerate(kept):
+            i = _term_index(t, toks)
+            for alt in SYNONYMS.get(t.lower(), []) if i < 0 else []:
+                i = _term_index(alt, toks)
+                if i >= 0:
+                    break
+            if i < 0 and _has_digit(t):
+                i = _model_index(t, kept[k - 1] if k else None, toks)
+            idxs.append(i)
+        if any(i < 0 and _has_digit(t) for t, i in zip(kept, idxs)):
+            continue                                   # a model number was searched for and this isn't it
+        cov = sum(w for i, w in zip(idxs, weights) if i >= 0) / sum(weights)
+        if (len(kept) == 1 and idxs[0] < 0) or cov < 0.5:
+            continue
+        sc = 60 * cov
+        matched = [i for i in idxs if i >= 0]
+        sc += 12 * (1 - min(matched) / len(toks))      # query words early in the title
+        if len(matched) == len(kept) and matched == sorted(matched) and max(matched) - min(matched) <= len(kept) + 1:
+            sc += 8                                    # words together, in order
+        if idxs[0] == 0:
+            sc += 5
+        sc -= min(10, max(0, len(toks) - 14) * 0.5)    # keyword-stuffed titles
+        cut = next((i for i, t in enumerate(toks) if t in CUT and i > 0), len(toks))
+        kind = 0 if shopping_acc else max((_acc_kind(t) for t in toks[:cut] if t not in qtoks), default=0)
+        f = next((i for i, t in enumerate(toks) if t in FOR and i > 0), None)
+        for_flag = (not shopping_acc) and f is not None and min(matched) > f  # query words only after "for"
+        cands.append([o, sc, kind, for_flag])
+
+    clean = sorted(c[0].price for c in cands if c[2] == 0 and not c[3])
+    pool = clean if len(clean) >= 2 else sorted(c[0].price for c in cands)
+    med = pool[len(pool) // 2] if pool else 0.0
+    n = len(cands)
+    for c in cands:
+        o, sc, kind, for_flag = c
+        acc = for_flag
+        if not acc and kind == 2:
+            acc = n < 4 or o.price < 0.6 * med
+        elif not acc and kind == 1:
+            acc = n >= 4 and o.price < 0.35 * med
+        if acc:
+            sc -= 45
+        elif n >= 4 and med and o.price < 0.15 * med:
+            sc -= 10
+        o.score, o.accessory = max(0.0, min(100.0, sc)), acc
+    return sorted((c[0] for c in cands), key=lambda o: (-o.score, o.price))
+
+
+def apply_ozb_discount(offers: list[Offer]) -> list[Offer]:
+    """Keep an OzBargain deal only if it is discounted: the post gives an RRP/was price, or it beats the
+    typical price at other shops by 5%+. With nothing to compare against, a well-voted (10+) deal is kept."""
+    pool = sorted(o.price for o in offers if o.source != "ozb" and not o.accessory and o.score >= ALERT_MIN_SCORE)
+    ref = pool[len(pool) // 2] if len(pool) >= 2 else None
+    keep = []
+    for o in offers:
+        if o.source != "ozb" or o.accessory:
+            keep.append(o)
+        elif o.was_price and o.was_price > o.price:
+            keep.append(o)
+        elif ref and o.price <= 0.95 * ref:
+            o.ref_price = ref
+            keep.append(o)
+        elif not ref and o.votes >= 10:
+            keep.append(o)
+    return keep
+
+
+def deal_pct(o: Offer, prev: float | None = None) -> tuple[float | None, str | None]:
+    """(percent off, kind) when an offer is a real discount, else (None, None).
+    kinds: markdown (shop lists a was-price) | below (OzBargain vs other shops) | dropped (cheaper than last
+    time we saw it) | ozb (a vetted OzBargain deal with nothing to compare against)."""
+    if o.was_price and o.was_price > o.price:
+        return 100 * (o.was_price - o.price) / o.was_price, "markdown"
+    if o.ref_price and o.ref_price > o.price:
+        return 100 * (o.ref_price - o.price) / o.ref_price, "below"
+    if prev and prev > o.price * 1.03:
+        return 100 * (prev - o.price) / prev, "dropped"
+    if o.source == "ozb":
+        return 0.0, "ozb"
+    return None, None
+
+
+def order_offers(offers: list[Offer], sort: str = "Best match", hide_acc: bool = False, limited: bool = False,
+                 prev: dict | None = None, hide_used: bool = False, value_key=None) -> tuple[list[Offer], list[Offer]]:
+    """Split ranked offers into (deals, regular prices) and order each by the chosen sort."""
+    rows = [o for o in offers if not (hide_acc and o.accessory) and not (hide_used and o.used)]
+    if limited:
+        rows = [o for o in rows if o.expires]
+    prev = prev or {}
+    info = {id(o): deal_pct(o, prev.get(o.url)) for o in rows}
+    deals = [o for o in rows if info[id(o)][1] and not o.used and not o.oos]
+    others = [o for o in rows if not (info[id(o)][1] and not o.used and not o.oos)]
+    others.sort(key=lambda o: o.oos)                   # out-of-stock items sink to the bottom (stable sort)
+
+    def pct(o):
+        return info[id(o)][0] or 0.0
+
+    if sort == "Price: low to high":
+        key = lambda o: o.price
+    elif sort == "Price: high to low":
+        key = lambda o: -o.price
+    elif sort == "Biggest discount":
+        key = lambda o: (-pct(o), o.price)
+    elif sort == "Ending soon":
+        key = lambda o: (o.expires is None, o.expires or 0, -o.score)
+    elif sort in ("Best value", "Deal score") and value_key:
+        key = lambda o: (o.oos, value_key(o))
+    else:                                              # best match: strong, non-accessory deals first, biggest cut first
+        deals.sort(key=lambda o: (o.accessory or o.score < ALERT_MIN_SCORE, -pct(o), -o.score))
+        return deals, others
+    deals.sort(key=key)
+    others.sort(key=lambda o: (o.oos, key(o)))
+    return deals, others
+
+
+JUNK_RATIO = 0.10      # a listing priced 90%+ below the typical price is treated as irrelevant
+
+
+class Report(list):
+    """Per-store results (a plain list) that also says how many listings were filtered out."""
+    paused = 0     # stores skipped because they keep failing (retried every day or so)
+    skipped = 0    # stores not searched because they do not sell this kind of product
+    timed_out = 0  # stores that didn't answer within the time limit
+    junk = 0       # too cheap to be the thing searched for (cases, stickers, parts...)
+    hidden = 0     # from sites you've chosen to hide (eBay by default)
+    words: dict = {}  # word -> how many listings (before filtering) used it
+
+
+def blocked_words(cfg: dict | None) -> list[str]:
+    raw = (cfg or {}).get("blocked", DEFAULTS["blocked"]) or ""
+    return [w.strip().lower() for w in raw.split(",") if w.strip() and w.strip().lower() != "none"]
+
+
+def is_hidden_offer(o: Offer, words: list[str]) -> bool:
+    if o.source == "ozb":                          # community posts are vetted by OzBargain, even ones that point at eBay
+        return False
+    host = urlparse(o.url).netloc.lower()
+    label = f"{o.store} {host}".lower()
+    return any(w in label for w in words)
+
+
+def drop_junk_prices(offers: list[Offer], ratio: float = JUNK_RATIO) -> tuple[list[Offer], int]:
+    """Drop listings priced under `ratio` x the typical (median) price of the strong matches.
+    Needs 3+ strong matches to know what 'typical' is."""
+    pool = sorted(o.price for o in offers if o.score >= ALERT_MIN_SCORE and not o.accessory and not o.used)
+    if len(pool) < 3:
+        return offers, 0
+    base = pool[len(pool) // 2]
+    keep = [o for o in offers if o.price >= base * ratio]
+    return keep, len(offers) - len(keep)
+
+
+POOL_WORKERS = 12
+DEAD_AFTER = 3          # a store that fails this many times in a row is paused for a day (then 2, 4, 7 days)
+FAIL_KINDS = {"blocked", "notfound", "needsjs", "botcheck", "nobrowser", "error"}
+
+
+def record_health(con, store_id, ok: bool, kind: str | None = None):
+    """Track consecutive failures so searches stop wasting time on stores that never work."""
+    row = con.execute("SELECT fail_streak FROM stores WHERE id=?", (store_id,)).fetchone() if store_id else None
+    if not row:
+        return
+    if ok:
+        streak, skip = 0, 0.0
+    elif kind is None or kind in FAIL_KINDS:
+        streak = (row["fail_streak"] or 0) + 1
+        skip = time.time() + min(7, 2 ** max(0, streak - DEAD_AFTER)) * 86400 if streak >= DEAD_AFTER else 0.0
+    else:
+        return
+    con.execute("UPDATE stores SET fail_streak=?, skip_until=? WHERE id=?", (streak, skip, store_id))
+
+
+def reset_health(con):
+    con.execute("UPDATE stores SET fail_streak=0, skip_until=0")
+    con.commit()
+
+
+def find_offers_many(queries: list[tuple], stores: list[dict], cfg: dict | None = None, progress=None,
+                     deadline: float = 45.0, skip_dead: bool = True) -> dict:
+    """Scan every (search, store) pair at once on one shared pool. queries = [(key, keywords)].
+    Returns {key: (offers ranked by relevance, Report)}. Slow stragglers are dropped after `deadline` seconds."""
+    words, now = blocked_words(cfg), time.time()
+    usable = [st for st in stores if not any(w in f"{st['name']} {st['search_url']}".lower() for w in words)]
+    paused = [st for st in usable if skip_dead and (st.get("skip_until") or 0) > now]
+    live = [st for st in usable if st not in paused]
+    results = {k: [] for k, _ in queries}
+    late = {k: [] for k, _ in queries}
+    picked = {k: select_stores(live, kw, cfg) for k, kw in queries}
+    total = sum(len(v) for v in picked.values())
+    ex = ThreadPoolExecutor(max_workers=max(1, min(POOL_WORKERS, total)))
+    futs = {ex.submit(_scan_one, dict(st), kw, cfg): (k, st) for k, kw in queries for st in picked[k]}
+    done, t0, cut, pending = 0, time.time(), deadline, set(futs)
+    try:
+        while pending:
+            left = t0 + cut - time.time()
+            if left <= 0:
+                break
+            finished, pending = wait(pending, timeout=min(left, 0.4), return_when=FIRST_COMPLETED)
+            for fut in finished:
+                k, _ = futs[fut]
+                results[k].append(fut.result())
+                done += 1
+                if progress:
+                    progress(done, total)
+            el = time.time() - t0
+            if cut == deadline and total and done >= 0.85 * total and el >= 5:
+                cut = min(deadline, el + max(3.0, el * 0.4))      # most stores are in: don't wait long for the stragglers
+    finally:
+        for fut, (k, st) in futs.items():
+            if not fut.done():
+                fut.cancel()
+                late[k].append(st)
+        ex.shutdown(wait=False, cancel_futures=True)
+
+    con, out, seen = db(), {}, {}
+    for k, kw in queries:
+        raw = [o for _, offs, _ in results[k] for o in offs]
+        hid = hidden_url_set(con)
+        for o in raw:
+            o.used = o.used or bool(USED_RE.search(o.title))
+        visible = [o for o in raw if not is_hidden_offer(o, words) and o.url not in hid]
+        ranked, junk = drop_junk_prices(rank_offers(kw, visible))
+        ranked = apply_ozb_discount(ranked)
+        try:
+            record_seen(con, [o for o in ranked if o.source != "ozb" and o.score >= 30][:250])
+            learn_vocab(con, [o for o in ranked if o.score >= ALERT_MIN_SCORE][:60])
+        except Exception:  # noqa: BLE001
+            pass
+        report = Report({"id": s["id"], "name": s["name"],
+                         "status": status_text(len(offs), err, bool(s.get("_browser_used"))),
+                         "raw": len(offs), "err": err} for s, offs, err in results[k])
+        report.extend({"id": st["id"], "name": st["name"], "status": "Too slow - skipped this time",
+                       "raw": 0, "err": "timeout"} for st in late[k])
+        report.junk, report.hidden = junk, len(raw) - len(visible)
+        report.words = {}
+        for o in raw[:800]:                         # words the shops' own search found - used for "did you mean"
+            for w in set(re.findall(r"[a-z]{4,}", o.title.lower())):
+                report.words[w] = report.words.get(w, 0) + 1
+        report.paused, report.timed_out = len(paused), len(late[k])
+        report.skipped = len(live) - len(picked[k])
+        out[k] = (ranked, report)
+        for s, offs, err in results[k]:
+            agg = seen.setdefault(s["id"], [False, None, None])
+            agg[0] = agg[0] or bool(offs)
+            agg[1] = agg[1] or err
+            agg[2] = status_text(len(offs), err, bool(s.get("_browser_used")))
+    for sid, (ok, kind, status) in seen.items():
+        record_health(con, sid, ok, kind)
+        con.execute("UPDATE stores SET status=?, tested_at=? WHERE id=?", (status, time.time(), sid))
+    con.commit()
+    return out
+
+
+def find_offers(keywords: str, stores: list[dict], cfg: dict | None = None, workers: int | None = None,
+                progress=None, deadline: float = 45.0):
+    """Search every store in parallel. Returns (offers ranked by relevance, per-store report)."""
+    return find_offers_many([("q", keywords)], stores, cfg, progress, deadline)["q"]
+
+
+def test_store(store: dict, query: str = "laptop", cfg: dict | None = None) -> tuple[str, bool]:
+    try:
+        n = len(scrape_store(store, query, cfg, query))
+        return status_text(n, None, bool(store.get("_browser_used"))), n > 0
+    except FetchError as e:
+        return status_text(0, e.kind), False
+    except Exception:  # noqa: BLE001
+        return status_text(0, "error"), False
+
+
+# --------------------------------------------------------------------------- #
+# Alerts
+# --------------------------------------------------------------------------- #
+def notify(s: dict, subject: str, body: str, url: str | None, log=print):
+    if s.get("ntfy"):
+        try:
+            h = {"Title": subject.encode("utf-8"), "Priority": "high", "Tags": "moneybag"}
+            if url:
+                h["Click"] = url
+            requests.post(f"https://ntfy.sh/{s['ntfy']}", data=body.encode("utf-8"), headers=h, timeout=15)
+        except requests.RequestException as e:
+            log(f"ntfy failed: {e}")
+    if s.get("discord"):
+        try:
+            requests.post(s["discord"], json={"content": f"**{subject}**\n{body}"}, timeout=15)
+        except requests.RequestException as e:
+            log(f"Discord failed: {e}")
+    if s.get("tg_token") and s.get("tg_chat"):
+        try:
+            requests.post(f"https://api.telegram.org/bot{s['tg_token']}/sendMessage",
+                          json={"chat_id": s["tg_chat"], "text": f"{subject}\n{body}"}, timeout=15)
+        except requests.RequestException as e:
+            log(f"Telegram failed: {e}")
+    if s.get("email_host") and s.get("email_to"):
+        try:
+            msg = EmailMessage()
+            msg["Subject"], msg["From"], msg["To"] = subject, s.get("email_from") or s["email_user"], s["email_to"]
+            msg.set_content(body)
+            with smtplib.SMTP(s["email_host"], int(float(s.get("email_port") or 587)), timeout=20) as srv:
+                srv.starttls()
+                srv.login(s["email_user"], s["email_pass"])
+                srv.send_message(msg)
+        except Exception as e:  # noqa: BLE001
+            log(f"Email failed: {e}")
+
+
+def expiry_text(ts: float, now: float | None = None) -> str:
+    """'ends Sat 23 Nov 18:00 (in 2d 4h)'"""
+    left = ts - (now or time.time())
+    when = time.strftime("%a %d %b %H:%M", time.localtime(ts))
+    if left <= 0:
+        return f"ended {when}"
+    d, rem = divmod(int(left), 86400)
+    h, m = rem // 3600, (rem % 3600) // 60
+    span = f"{d}d {h}h" if d else (f"{h}h {m}m" if h else f"{m}m")
+    return f"ends {when} (in {span})"
+
+
+def cut_text(sym: str, old: float, new: float) -> str:
+    """'-$120.99, -30%' for a price falling from old to new."""
+    d = old - new
+    return f"-{money(sym, d)}, -{100 * d / old:.0f}%"
+
+
+def evaluate(con, item, offer: Offer, sym: str = "$") -> list[str]:
+    """Reasons this offer deserves an alert (empty = no alert)."""
+    min_drop = (item["min_drop_pct"] or 10) / 100
+    if offer.source == "ozb":                          # community-posted deal (already filtered to discounted ones)
+        base = offer.was_price or offer.ref_price
+        marked = bool(base and (base - offer.price) / base >= min_drop)
+        on_target = item["max_price"] is not None and offer.price <= item["max_price"]
+        if item["max_price"] is not None and not on_target:
+            return []
+        if not (on_target or marked):
+            return []
+        bits = [f"OzBargain deal ({offer.votes:+d} votes)"]
+        if on_target:
+            bits.append(f"at/below your {money(sym, item['max_price'])} target")
+        if marked and offer.was_price:
+            bits.append(f"marked down from {money(sym, offer.was_price)} ({cut_text(sym, offer.was_price, offer.price)})")
+        elif marked:
+            bits.append(f"{100 * (base - offer.price) / base:.0f}% below other shops (typically {money(sym, base)})")
+        if offer.expires:
+            bits.append(expiry_text(offer.expires))
+        return bits
+    prev = con.execute("SELECT price FROM prices WHERE item_id=? AND url=? ORDER BY seen_at DESC LIMIT 1",
+                       (item["id"], offer.url)).fetchone()
+    on_sale = bool(offer.was_price and offer.was_price > offer.price
+                   and (offer.was_price - offer.price) / offer.was_price >= min_drop)
+    dropped = bool(prev and prev["price"] > offer.price
+                   and (prev["price"] - offer.price) / prev["price"] >= min_drop)
+    reasons = []
+    if item["max_price"] is not None:
+        if offer.price <= item["max_price"]:
+            reasons.append(f"at/below your {money(sym, item['max_price'])} target")
+            if on_sale:
+                reasons.append(f"marked down from {money(sym, offer.was_price)} ({cut_text(sym, offer.was_price, offer.price)})")
+            if dropped:
+                reasons.append(f"dropped from {money(sym, prev['price'])} ({cut_text(sym, prev['price'], offer.price)})")
+    else:
+        if on_sale:
+            reasons.append(f"marked down from {money(sym, offer.was_price)} ({cut_text(sym, offer.was_price, offer.price)})")
+        if dropped:
+            reasons.append(f"dropped from {money(sym, prev['price'])} ({cut_text(sym, prev['price'], offer.price)})")
+    return reasons
+
+
+def regular_price(con, item_id: int, days: int = 180) -> tuple[float, int] | None:
+    """(usual price when NOT on sale, how many prices it's based on). Uses the shops' own 'was' prices and the
+    prices of listings that weren't discounted - not the sale prices - and takes the middle value so one odd
+    listing can't skew it. None until there are at least 3 such prices."""
+    vals = sorted(r[0] for r in con.execute(
+        "SELECT reg FROM prices WHERE item_id=? AND reg IS NOT NULL AND seen_at>?", (item_id, time.time() - days * 86400)))
+    if len(vals) < 3:
+        return None
+    return vals[len(vals) // 2], len(vals)
+
+
+def reset_history(con, item_id: int) -> list[tuple]:
+    """Clear an item's price history (the graph). Returns the removed rows so the caller can offer Undo."""
+    rows = [tuple(r) for r in con.execute(
+        "SELECT item_id,store,url,title,price,seen_at,reg FROM prices WHERE item_id=?", (item_id,))]
+    con.execute("DELETE FROM prices WHERE item_id=?", (item_id,))
+    con.execute("UPDATE watchlist SET best_price=NULL, best_store=NULL, best_title=NULL, best_url=NULL WHERE id=?", (item_id,))
+    con.commit()
+    return rows
+
+
+def restore_history(con, rows: list[tuple]):
+    con.executemany("INSERT INTO prices(item_id,store,url,title,price,seen_at,reg) VALUES(?,?,?,?,?,?,?)", rows)
+    con.commit()
+
+
+def price_history(con, item_id: int) -> list[dict]:
+    """Cheapest good match at each check, oldest first: [{t, price, store, url, title}]."""
+    rows = con.execute("SELECT seen_at, price, store, url, title FROM prices WHERE item_id=? "
+                       "ORDER BY seen_at, price", (item_id,)).fetchall()
+    out, last = [], None
+    for r in rows:
+        if r["seen_at"] != last:
+            out.append({"t": r["seen_at"], "price": r["price"], "store": r["store"],
+                        "url": r["url"], "title": r["title"]})
+            last = r["seen_at"]
+    return out
+
+
+def last_prices(con, urls) -> dict:
+    """Most recent price we recorded for each URL (from earlier watchlist checks)."""
+    urls, out = list(urls), {}
+    for i in range(0, len(urls), 500):
+        chunk = urls[i:i + 500]
+        q = "SELECT url, price FROM prices WHERE url IN (%s) ORDER BY seen_at" % ",".join("?" * len(chunk))
+        for r in con.execute(q, chunk):
+            out[r["url"]] = r["price"]
+    return out
+
+
+def already_alerted(con, item_id, url, price) -> bool:
+    row = con.execute("SELECT price, sent_at FROM alerts WHERE item_id=? AND url=? "
+                      "ORDER BY sent_at DESC LIMIT 1", (item_id, url)).fetchone()
+    return bool(row and price >= row["price"] * 0.999 and time.time() - row["sent_at"] < 7 * 86400)
+
+
+def run_check(log=print, on_alert=None, progress=None, only_id: int | None = None) -> int:
+    """Check every watchlist item (or just `only_id`, even if paused) across all active stores. Returns alerts sent."""
+    con = db()
+    s = get_settings(con)
+    if only_id is not None:
+        items = con.execute("SELECT * FROM watchlist WHERE id=?", (only_id,)).fetchall()
+    else:
+        items = con.execute("SELECT * FROM watchlist WHERE COALESCE(paused,0)=0").fetchall()
+    stores = active_stores(con, s["region"])
+    if not items:
+        log("Your watchlist is empty - add something first.")
+        return 0
+    if not stores:
+        log("No stores are enabled. Pick a region or switch stores on.")
+        return 0
+    sym, now, sent = s["currency"], time.time(), 0
+    held = hold_alerts(s)
+    log(f"Checking {len(items)} item(s) across {len(stores)} sources" + (" (alerts held until your summary / quiet hours end)" if held else ""))
+    results = find_offers_many([(it["id"], it["keywords"]) for it in items], stores, s,
+                               progress=progress, deadline=75.0)
+
+    for item in items:
+        ranked, report = results[item["id"]]
+        skip = [w.strip().lower() for w in (item["ignore_stores"] or "").split(",") if w.strip()]
+        offers = sorted((o for o in ranked if o.score >= ALERT_MIN_SCORE and not o.accessory and not o.used
+                         and not any(w in o.store.lower() for w in skip)), key=lambda o: o.price)
+        stock_now = [o for o in offers if not o.oos and (item["max_price"] is None or o.price <= item["max_price"])]
+        if item["want_stock"] and not item["had_stock"] and stock_now:        # it was all sold out before; now it's not
+            o = stock_now[0]
+            if not already_alerted(con, item["id"], o.url, o.price):
+                subject = f"Back in stock: {o.title[:60]} - {money(sym, o.price)} at {o.store}"
+                if not held:
+                    notify(s, subject, f"{o.title}\n{money(sym, o.price)}\n{o.url}", o.url, log)
+                con.execute("INSERT INTO alerts(item_id,keywords,title,store,url,price,reasons,sent_at,notified) VALUES(?,?,?,?,?,?,?,?,?)",
+                            (item["id"], item["keywords"], o.title, o.store, o.url, o.price, "back in stock", now, 0 if held else 1))
+                sent += 1
+                if on_alert and not held:
+                    on_alert({"keywords": item["keywords"], "title": o.title, "store": o.store, "price": o.price,
+                              "url": o.url, "reasons": "back in stock"})
+        con.execute("UPDATE watchlist SET had_stock=? WHERE id=?", (1 if stock_now else 0, item["id"]))
+        offers = [o for o in offers if not o.oos]
+        ok = sum(1 for r in report if r["raw"] > 0)
+        log(f"{item['keywords']}: {ok} of {len(report)} sources returned products - {len(offers)} matching"
+            + (f" ({report.paused} paused, {report.timed_out} too slow)" if report.paused or report.timed_out else ""))
+        for o in offers:
+            reasons = evaluate(con, item, o, sym)
+            if reasons and not already_alerted(con, item["id"], o.url, o.price):
+                subject = f"Deal: {o.title[:60]} - {money(sym, o.price)} at {o.store}"
+                body = f"{o.title}\n{money(sym, o.price)} ({'; '.join(reasons)})\n{o.url}"
+                if not held:
+                    notify(s, subject, body, o.url, log)
+                con.execute("INSERT INTO alerts(item_id,keywords,title,store,url,price,reasons,sent_at,notified) "
+                            "VALUES(?,?,?,?,?,?,?,?,?)",
+                            (item["id"], item["keywords"], o.title, o.store, o.url, o.price,
+                             "; ".join(reasons), now, 0 if held else 1))
+                sent += 1
+                log(f"DEAL: {subject}")
+                if on_alert and not held:
+                    on_alert({"keywords": item["keywords"], "title": o.title, "store": o.store,
+                              "price": o.price, "url": o.url, "reasons": "; ".join(reasons)})
+            if o.source != "ozb":                      # community posts never go into the retailer price history
+                pct_, kind_ = deal_pct(o)
+                reg = o.was_price if kind_ == "markdown" else (o.price if kind_ is None else None)
+                con.execute("INSERT INTO prices(item_id,store,url,title,price,seen_at,reg) VALUES(?,?,?,?,?,?,?)",
+                            (item["id"], o.store, o.url, o.title, o.price, now, reg))
+        best = offers[0] if offers else None
+        con.execute("UPDATE watchlist SET best_price=?, best_store=?, best_title=?, best_url=?, checked_at=? "
+                    "WHERE id=?", (best.price if best else None, best.store if best else None,
+                                   best.title if best else None, best.url if best else None, now, item["id"]))
+        con.commit()
+    try:
+        send_pending(con, s, log)
+    except Exception as e:  # noqa: BLE001
+        log(f"summary failed: {e}")
+    return sent
+
+
+# --------------------------------------------------------------------------- #
+# Daily summary + quiet hours
+# --------------------------------------------------------------------------- #
+def in_quiet(s: dict, now: float | None = None) -> bool:
+    """True during the user's quiet hours (default 10pm-7am) when they have switched them on."""
+    if str(s.get("quiet_on", "0")) != "1":
+        return False
+    try:
+        a, b = int(float(s.get("quiet_start", 22))), int(float(s.get("quiet_end", 7)))
+    except ValueError:
+        return False
+    h = time.localtime(now or time.time()).tm_hour
+    return (a <= h < b) if a < b else (h >= a or h < b) if a != b else False
+
+
+def hold_alerts(s: dict) -> bool:
+    return s.get("alert_mode") == "summary" or in_quiet(s)
+
+
+def send_pending(con, s: dict, log=print, now: float | None = None) -> int:
+    """Send held alerts as ONE message: at the summary hour (summary mode) or once quiet hours end."""
+    now = now or time.time()
+    rows = con.execute("SELECT * FROM alerts WHERE notified=0 ORDER BY price DESC").fetchall()
+    if not rows or in_quiet(s, now):
+        return 0
+    lt = time.localtime(now)
+    if s.get("alert_mode") == "summary":
+        try:
+            hour = int(float(s.get("summary_hour", 8)))
+        except ValueError:
+            hour = 8
+        today = time.strftime("%Y-%m-%d", lt)
+        if lt.tm_hour < hour or s.get("summary_sent") == today:
+            return 0
+        set_setting(con, "summary_sent", today)
+    sym = s.get("currency", "$")
+    best: dict[str, sqlite3.Row] = {}
+    for r in rows:                                   # one line per product (cheapest)
+        k = r["keywords"]
+        if k not in best or r["price"] < best[k]["price"]:
+            best[k] = r
+    lines = [f"- {r['title'][:70]}: {money(sym, r['price'])} at {r['store']}" + (f" ({r['reasons']})" if r["reasons"] else "")
+             for r in list(best.values())[:12]]
+    picks = []
+    if s.get("alert_mode") == "summary":
+        for r in con.execute("SELECT title,price,store,pct FROM picks WHERE kind='daily' ORDER BY found_at DESC, pct DESC LIMIT 3"):
+            picks.append(f"* {r['title'][:60]}: {money(sym, r['price'])} at {r['store']} ({r['pct']:.0f}% off)")
+    body = "\n".join(lines) + (("\n\nTop daily deals:\n" + "\n".join(picks)) if picks else "")
+    n = len(best)
+    notify(s, f"Deals summary: {n} item{'s' if n != 1 else ''} on sale", body, None, log)
+    con.execute("UPDATE alerts SET notified=1 WHERE notified=0")
+    con.commit()
+    return len(rows)
+
+
+# --------------------------------------------------------------------------- #
+# Deal score: one 0-100 number that says how good a listing really is
+# --------------------------------------------------------------------------- #
+def deal_score(o: Offer, prev: float | None = None, st: dict | None = None, info: dict | None = None,
+               typical: float | None = None) -> tuple[int, str, list[str]]:
+    """(score, label, reasons). Built from the real discount, how the price compares with its own history,
+    reviews, the price against other shops, and OzBargain votes. Unverified 'was' prices score low."""
+    pct, kind = deal_pct(o, prev)
+    why: list[str] = []
+    if not kind:
+        return 0, "", []
+    pts = 0.0
+    if kind != "ozb":
+        pts += min(45.0, (pct or 0) * 0.9)
+        why.append(f"{pct:.0f}% off")
+    verdict, _ = price_verdict(o, st)
+    if verdict == "lowest":
+        pts += 22
+        why.append("lowest price we've seen")
+    elif verdict == "inflated":
+        pts = min(pts, 18) - 5
+        why.append("was-price unverified")
+    elif st and st.get("n", 0) >= 3 and st.get("median") and o.price <= st["median"] * 0.9:
+        pts += 10
+        why.append("below its usual price")
+    if info:
+        tone = review_verdict(info)[0]
+        if tone == "good":
+            pts += 15
+            why.append("good reviews")
+        elif tone == "ok":
+            pts += 5
+        elif tone == "poor":
+            pts -= 20
+            why.append("poor reviews")
+    if typical and o.price < typical * 0.9 and not o.accessory:
+        pts += 8
+        why.append("cheaper than most shops")
+    if o.source == "ozb":
+        pts += 20 + min(15, max(0, o.votes) / 6)
+        why.append(f"{o.votes:+d} votes")
+    if o.accessory:
+        pts -= 15
+    sc = int(max(0, min(100, round(pts))))
+    return sc, ("Great" if sc >= 75 else "Good" if sc >= 55 else "Fair" if sc >= 35 else "Weak"), why
+
+
+# --------------------------------------------------------------------------- #
+# Store health: do the parsers still find products on each store?
+# --------------------------------------------------------------------------- #
+SNAP_DIR = Path(DB_PATH).parent / "snapshots"
+
+
+def health_check(stores: list[dict], cfg: dict | None = None, progress=None, query: str = "tv") -> list[dict]:
+    """Search every store for a common product. Returns [{name, status, count, ms}]; a store that returns a page
+    but no products has its page saved to snapshots/ so a changed layout can be looked at."""
+    cfg = cfg or {}
+    out: list[dict] = []
+
+    def one(st):
+        t0 = time.time()
+        try:
+            offs = scrape_store(st, query, cfg)
+            bad = [o for o in offs if not o.price or o.price <= 0]
+            status = "ok" if len(offs) >= 3 and not bad else "few" if offs else "none"
+            return {"name": st["name"], "status": status, "count": len(offs), "ms": int((time.time() - t0) * 1000), "err": ""}
+        except FetchError as e:
+            return {"name": st["name"], "status": e.kind, "count": 0, "ms": int((time.time() - t0) * 1000), "err": str(e)}
+        except Exception as e:  # noqa: BLE001
+            return {"name": st["name"], "status": "error", "count": 0, "ms": 0, "err": str(e)}
+
+    with ThreadPoolExecutor(max_workers=POOL_WORKERS) as ex:
+        futs = [ex.submit(one, st) for st in stores]
+        for i, f in enumerate(futs, 1):
+            out.append(f.result())
+            if progress:
+                progress(i, len(futs))
+    for r, st in zip(out, stores):
+        if r["status"] == "none" and not str(st["search_url"]).startswith(("ozb:",)) and "staticice." not in st["search_url"]:
+            try:
+                SNAP_DIR.mkdir(exist_ok=True)
+                page = fetch(st["search_url"].replace("{query}", quote_plus(query)), timeout=(6, 10))
+                (SNAP_DIR / (re.sub(r"\W+", "_", st["name"]) + ".html")).write_text(page[:300000], encoding="utf-8")
+                r["snap"] = True
+            except Exception:  # noqa: BLE001
+                pass
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# Daily deals + "For you" discovery
+# --------------------------------------------------------------------------- #
+DAILY_MIN_PRICE = 150.0     # "expensive" = at least this much
+DAILY_MIN_PCT = 25.0        # "great discount" = at least this much off
+FORYOU_MIN_PCT = 8.0
+DAILY_QUERIES = ["tv", "laptop", "monitor", "headphones", "soundbar", "fridge", "washing machine", "dishwasher",
+                 "robot vacuum", "coffee machine", "mattress", "power tool", "e-bike", "iphone", "camera",
+                 "air fryer", "treadmill", "lawn mower", "smartwatch", "gaming console", "tablet", "dryer",
+                 "air conditioner", "vacuum cleaner", "drill", "bbq", "sofa", "bike", "speaker", "printer",
+                 "gaming laptop", "graphics card", "ssd", "wireless earbuds", "projector", "dyson", "pressure washer",
+                 "tool kit", "golf", "camping tent", "pram", "perfume", "sneakers", "backpack", "microwave", "oven"]
+DAILY_SWEEP = 22            # categories checked per refresh, picked at random so each refresh shows different things
+DAILY_KEEP = 150
+SIBLINGS = {"headphones": ["earbuds", "speaker", "soundbar"], "earbuds": ["headphones"], "tv": ["soundbar", "monitor", "projector"],
+            "laptop": ["tablet", "monitor"], "monitor": ["laptop", "tv"], "phone": ["earbuds", "smartwatch"],
+            "iphone": ["airpods", "smartwatch"], "drill": ["impact driver", "saw", "grinder"], "vacuum": ["robot vacuum", "air purifier"],
+            "fridge": ["freezer", "dishwasher"], "camera": ["lens", "drone"], "console": ["controller", "headset"],
+            "playstation": ["controller", "headset"], "watch": ["smartwatch"], "smartwatch": ["watch"], "bike": ["helmet", "e-bike"],
+            "coffee": ["espresso machine"], "mattress": ["pillow", "quilt"], "speaker": ["soundbar", "headphones"],
+            "shoes": ["sneakers", "boots"], "sneakers": ["shoes"], "mower": ["whipper snipper", "blower"],
+            "keyboard": ["mouse"], "mouse": ["keyboard"]}
+DAILY_EVERY = 20 * 3600     # refreshed at most about once a day
+FORYOU_ADD = 24             # new suggestions per refresh: it fills up slowly, on purpose
+
+
+def _saving(o: Offer) -> float:
+    base = o.was_price or o.ref_price or 0
+    return max(0.0, base - o.price)
+
+
+def _great(o: Offer, min_price: float, min_pct: float, prev: dict | None = None, allow_ozb: bool = False) -> float | None:
+    """Percent off when `o` is a real, strong discount worth showing; else None."""
+    if o.accessory or o.used or o.oos or o.price < min_price:
+        return None
+    pct, kind = deal_pct(o, (prev or {}).get(o.url))
+    if kind == "ozb" and allow_ozb:
+        return 10.0                                    # a vetted community deal with nothing to compare against
+    if kind in (None, "ozb") or pct is None or pct < min_pct or pct > 90:
+        return None
+    return pct
+
+
+def _store_pick(con, kind: str, o: Offer, pct: float, terms: str = ""):
+    base = o.was_price or o.ref_price
+    con.execute("INSERT OR REPLACE INTO picks(kind,url,store,title,price,was,pct,image,source,expires,votes,terms,found_at,basis)"
+                " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (kind, o.url, o.store, o.title, o.price, base, pct, o.image, o.source, o.expires, o.votes,
+                 terms, time.time(), "was" if o.was_price else "ref"))
+
+
+def pick_offers(con, kind: str, limit: int = 200) -> list[Offer]:
+    """Saved picks as Offers (a 'was' price is stored so the normal card shows the saving)."""
+    fb = {r["url"] for r in con.execute("SELECT url FROM feedback WHERE verdict='no'")}
+    rows = con.execute("SELECT * FROM picks WHERE kind=? ORDER BY found_at DESC, pct DESC LIMIT ?", (kind, limit)).fetchall()
+    out = []
+    for r in rows:
+        if r["url"] in fb:
+            continue
+        if r["expires"] and r["expires"] < time.time():
+            continue
+        ref = r["basis"] == "ref"
+        out.append(Offer(r["store"], r["title"], r["price"], r["url"], None if ref else r["was"], r["image"],
+                         expires=r["expires"], votes=r["votes"] or 0, source=r["source"] or "store",
+                         ref_price=r["was"] if ref else None))
+    if kind == "daily":
+        out.sort(key=_saving, reverse=True)
+    return out
+
+
+def picks_age(con, kind: str) -> float | None:
+    r = con.execute("SELECT MAX(found_at) m FROM picks WHERE kind=?", (kind,)).fetchone()
+    return (time.time() - r["m"]) if r and r["m"] else None
+
+
+def refresh_daily(stores: list[dict], cfg: dict | None = None, progress=None, log=print) -> int:
+    """Big-ticket items that are a long way below their normal price today. Returns how many were found."""
+    con = db()
+    cfg = dict(cfg or {})
+    queries = [(q, q) for q in random.sample(DAILY_QUERIES, min(DAILY_SWEEP, len(DAILY_QUERIES)))]
+    res = find_offers_many(queries, stores, cfg, progress=progress, deadline=150.0)
+    found: dict[str, tuple[Offer, float]] = {}
+    for q, (ranked, _rep) in res.items():
+        prev = last_prices(con, [o.url for o in ranked])
+        for o in ranked:
+            if o.score < ALERT_MIN_SCORE:
+                continue
+            pct = _great(o, DAILY_MIN_PRICE, DAILY_MIN_PCT, prev)
+            if pct is not None and (o.url not in found or _saving(o) > _saving(found[o.url][0])):
+                found[o.url] = (o, pct)
+    # OzBargain front page: only posts that state both a deal price and a normal price
+    try:
+        for o in parse_ozb_feed(fetch_cached(f"{OZB_BASE}/deals/feed", ttl=600,
+                                             accept="application/rss+xml,application/xml,text/xml,*/*", ua=OZB_UA)):
+            if o.was_price and o.price >= DAILY_MIN_PRICE:
+                pct = 100 * (o.was_price - o.price) / o.was_price
+                if DAILY_MIN_PCT <= pct <= 90 and o.url not in found:
+                    found[o.url] = (o, pct)
+    except FetchError as e:
+        log(f"OzBargain front page: {e}")
+    fb = {r["url"] for r in con.execute("SELECT url FROM feedback WHERE verdict='no'")}
+    best = sorted((v for u, v in found.items() if u not in fb), key=lambda v: _saving(v[0]), reverse=True)[:DAILY_KEEP]
+    con.execute("DELETE FROM picks WHERE kind='daily'")
+    for o, pct in best:
+        _store_pick(con, "daily", o, pct)
+    con.commit()
+    return len(best)
+
+
+# ---- interests: learned from the watchlist and from Interested / Not interested clicks ----
+def _tokens(text: str) -> list[str]:
+    return [t for t in re.findall(r"[a-z0-9][a-z0-9\-]*", text.lower()) if t not in STOP]
+
+
+def _is_brand(t: str) -> bool:
+    n = norm(t)
+    return n in BRANDS or n in BRAND_ALIASES
+
+
+def _type_words(text: str) -> list[str]:
+    """Product-type words in some text ('headphones', 'drill'), in order, without brands or model numbers."""
+    out = []
+    for t in _tokens(text):
+        base = t if t in WORD_CATS else t.rstrip("s")
+        if base in WORD_CATS and not _is_brand(t) and not any(c.isdigit() for c in t) and base not in out:
+            out.append(base)
+    return out
+
+
+def _brand_words(text: str) -> list[str]:
+    return [norm(t) for t in _tokens(text) if _is_brand(t)]
+
+
+def set_feedback(con, o_url: str, verdict: str, title: str):
+    """verdict: 'yes' (interested) or 'no' (not interested)."""
+    terms = " ".join(_type_words(title)[:2] + _brand_words(title)[:1])
+    con.execute("INSERT OR REPLACE INTO feedback(url,verdict,terms,title,at) VALUES(?,?,?,?,?)",
+                (o_url, verdict, terms, title, time.time()))
+    if verdict == "no":
+        con.execute("DELETE FROM picks WHERE kind='foryou' AND url=?", (o_url,))
+    con.commit()
+
+
+def _taste(con) -> dict:
+    """Counts of liked / disliked product types and brands."""
+    t = {"like_types": {}, "no_types": {}, "like_brands": {}, "no_brands": {}}
+    for r in con.execute("SELECT verdict, title FROM feedback"):
+        yes = r["verdict"] == "yes"
+        for w in _type_words(r["title"] or "")[:2]:
+            d = t["like_types" if yes else "no_types"]
+            d[w] = d.get(w, 0) + 1
+        for b in _brand_words(r["title"] or "")[:1]:
+            d = t["like_brands" if yes else "no_brands"]
+            d[b] = d.get(b, 0) + 1
+    return t
+
+
+def interest_queries(con) -> list[str]:
+    """Searches that look for things like what you've saved or liked (not the exact items, to find new ones)."""
+    taste = _taste(con)
+    qs: list[str] = []
+    for r in con.execute("SELECT keywords FROM watchlist ORDER BY id"):
+        types = _type_words(r["keywords"])
+        if types:
+            q = " ".join(types[:2])
+        else:
+            q = " ".join(t for t in _tokens(r["keywords"]) if not _is_brand(t) and not any(c.isdigit() for c in t))
+        if q:
+            qs.append(q)
+    for w, n in sorted(taste["like_types"].items(), key=lambda kv: -kv[1]):
+        qs.append(w)
+    for q in list(qs):                                 # neighbouring kinds of product widen what it can suggest
+        for w in q.split():
+            qs.extend(SIBLINGS.get(w, [])[:2])
+    out = []
+    for q in qs:
+        words = q.split()
+        if any(taste["no_types"].get(w, 0) >= 3 and not taste["like_types"].get(w) for w in words):
+            continue                                   # you keep saying no to this kind of thing
+        if q not in out:
+            out.append(q)
+    return out
+
+
+def refresh_foryou(stores: list[dict], cfg: dict | None = None, progress=None, log=print) -> tuple[int, str]:
+    """Look for deals similar to what you follow. Adds a few new suggestions each time."""
+    con = db()
+    cfg = dict(cfg or {})
+    qs = interest_queries(con)
+    if not qs:
+        return 0, "Add something to your Watchlist (or mark a few Daily deals as Interested) and I'll start suggesting things."
+    off = int(get_settings(con).get("foryou_rot") or 0)
+    take = [qs[(off + i) % len(qs)] for i in range(min(6, len(qs)))]
+    set_setting(con, "foryou_rot", str(off + len(take)))
+    res = find_offers_many([(q, q) for q in take], stores, cfg, progress=progress, deadline=90.0)
+    taste = _taste(con)
+    seen_fb = {r["url"] for r in con.execute("SELECT url FROM feedback")}
+    have = {r["url"] for r in con.execute("SELECT url FROM picks WHERE kind='foryou'")}
+    watch_models = [[norm(t) for t in _tokens(r["keywords"]) if any(c.isdigit() for c in t)]
+                    for r in con.execute("SELECT keywords FROM watchlist")]
+    cands: list[tuple[float, Offer, float, str]] = []
+    med: dict[str, float] = {}
+    for q, (ranked, _rep) in res.items():
+        prev = last_prices(con, [o.url for o in ranked])
+        pool = sorted(o.price for o in ranked if o.score >= ALERT_MIN_SCORE and not o.accessory and o.source != "ozb")
+        if len(pool) >= 4:
+            med[q] = pool[len(pool) // 2]
+        for o in ranked:
+            if o.score < ALERT_MIN_SCORE or o.url in seen_fb or o.url in have:
+                continue
+            pct = _great(o, 20.0, FORYOU_MIN_PCT, prev, allow_ozb=True)
+            if pct is None and med.get(q) and o.price >= 20 and o.price <= 0.93 * med[q]:
+                pct = 100 * (1 - o.price / med[q])     # cheaper than most shops, even without a "was" price
+                o.ref_price = med[q]
+            if pct is None:
+                continue
+            nt = norm(o.title)
+            if any(m and all(x in nt for x in m) for m in watch_models):
+                continue                               # that's one you're already watching
+            br = (_brand_words(o.title) or [""])[0]
+            if taste["no_brands"].get(br, 0) >= 2 and not taste["like_brands"].get(br):
+                continue
+            bonus = 10 * min(2, taste["like_brands"].get(br, 0)) + (4 if o.source == "ozb" else 0)
+            cands.append((pct + bonus, o, pct, q))
+    cands.sort(key=lambda c: c[0], reverse=True)
+    added, per_q = 0, {}
+    for _, o, pct, q in cands:
+        if per_q.get(q, 0) >= max(4, FORYOU_ADD // max(1, len(take)) + 2):
+            continue
+        per_q[q] = per_q.get(q, 0) + 1
+        _store_pick(con, "foryou", o, pct, q)
+        added += 1
+        if added >= FORYOU_ADD:
+            break
+    con.execute("DELETE FROM picks WHERE kind='foryou' AND found_at < ?", (time.time() - 21 * 86400,))
+    con.commit()
+    return added, ("" if added else "Nothing new and well-discounted today. Check back tomorrow.")
+
+
+def keywords_from_title(title: str) -> str:
+    """Turn a product title into watchlist keywords: brand + model words, without marketing fluff."""
+    t = re.sub(r"(?i)\b(?:bonus|free)\b.*?(?:gift\s*cards?|vouchers?)", " ", title)
+    t = re.sub(r"[\[\(].*?[\]\)]", " ", t)
+    t = re.sub(r"(?i)@.*$|\$\s?\d[\d,.]*|\b(?:save|was|rrp|now|only|sale|deal|ozbargain)\b", " ", t)
+    words = [w for w in re.findall(r"[A-Za-z0-9][A-Za-z0-9\-\.\"']*", t) if w.lower() not in STOP]
+    return " ".join(words[:6]).strip()
+
+
+def add_to_watchlist(con, title: str) -> tuple[bool, str]:
+    """Add a product to the watchlist from its title. Returns (added, keywords)."""
+    kw = keywords_from_title(title)
+    if not kw:
+        return False, ""
+    have = {norm(r["keywords"]) for r in con.execute("SELECT keywords FROM watchlist")}
+    if norm(kw) in have:
+        return False, kw
+    con.execute("INSERT INTO watchlist(keywords) VALUES(?)", (kw,))
+    con.commit()
+    return True, kw
+
+
+# --------------------------------------------------------------------------- #
+# Reviews: product-page star ratings + what people say on Reddit
+# --------------------------------------------------------------------------- #
+REVIEW_MODES = ["Off", "Show ratings", "Hide poor reviews", "Only 4 stars and up"]
+REVIEW_TTL = 7 * 86400
+_RATING_TXT = re.compile(r"(?i)(\d(?:\.\d)?)\s*(?:out of|/)\s*5\b")
+_COUNT_TXT = re.compile(r"(?i)\(?(\d[\d,]*)\)?\s*(?:customer\s+)?(?:reviews?|ratings?)\b")
+
+
+def _agg(d):
+    """Find an aggregateRating in schema.org data. Returns (rating out of 5, review count) or None."""
+    if isinstance(d, list):
+        for x in d:
+            r = _agg(x)
+            if r:
+                return r
+    elif isinstance(d, dict):
+        a = d.get("aggregateRating")
+        if isinstance(a, dict):
+            try:
+                val = float(str(a.get("ratingValue")).replace(",", "."))
+                best = float(a.get("bestRating") or 5)
+                cnt = int(float(str(a.get("reviewCount") or a.get("ratingCount") or 0).replace(",", "")))
+                if best > 0 and val > 0:
+                    return round(5 * val / best, 2), cnt
+            except (TypeError, ValueError):
+                pass
+        for v in d.values():
+            if isinstance(v, (dict, list)):
+                r = _agg(v)
+                if r:
+                    return r
+    return None
+
+
+def parse_rating(page: str) -> tuple[float, int] | None:
+    """Star rating (out of 5) and number of reviews from a product page, or None if it shows none."""
+    page = page[:1_500_000]
+    for m in re.finditer(r'(?is)<script[^>]+ld\+json[^>]*>(.*?)</script>', page):
+        try:
+            r = _agg(json.loads(m.group(1)))
+        except (json.JSONDecodeError, ValueError):
+            continue
+        if r:
+            return r
+    m = re.search(r'(?i)itemprop=["\']ratingValue["\'][^>]*?content=["\']([\d.,]+)', page) or \
+        re.search(r'(?i)content=["\']([\d.,]+)["\'][^>]*?itemprop=["\']ratingValue', page)
+    if m:
+        try:
+            c = re.search(r'(?i)itemprop=["\'](?:reviewCount|ratingCount)["\'][^>]*?content=["\'](\d+)', page)
+            return float(m.group(1).replace(",", ".")), int(c.group(1)) if c else 0
+        except ValueError:
+            pass
+    m = _RATING_TXT.search(page)
+    if m:
+        c = _COUNT_TXT.search(page)
+        try:
+            return float(m.group(1)), int(c.group(1).replace(",", "")) if c else 0
+        except ValueError:
+            return None
+    return None
+
+
+_POS = ("recommend", "great", "solid", "love", "happy with", "reliable", "worth it", "worth the", "excellent", "best ",
+        "fantastic", "no issues", "no problems", "works well", "good value", "impressed", "rock solid", "highly rated",
+        "can't fault", "cant fault", "bang for")
+_NEG = ("avoid", "returned", "return it", "garbage", "terrible", "broke", "broken", "died", "dies", "unreliable",
+        "overpriced", "drop out", "dropouts", "dropping out", "waste of", "regret", "disappoint", "faulty", "crap",
+        "junk", "cheap plastic", "not worth", "stay away", "buggy", "constantly", "rubbish", "dead after", "lemon")
+_REDDIT = {"until": 0.0}
+_REDDIT_LOCK = threading.Lock()
+
+
+def reddit_sentiment(query: str) -> tuple[str, int] | None:
+    """What Reddit posts about this product say: ('positive' | 'mixed' | 'negative', posts used), else None.
+    Reddit often refuses automated requests; when it does we stop asking for a while and carry on without it."""
+    if time.time() < _REDDIT["until"]:
+        return None
+    toks = [norm(t) for t in query.split()[:4] if norm(t)]
+    if not toks:
+        return None
+    url = "https://www.reddit.com/search.json?" + urlencode({"q": f"{query} review", "limit": 25, "sort": "relevance", "t": "all"})
+    with _REDDIT_LOCK:                                  # one at a time, politely spaced
+        if time.time() < _REDDIT["until"]:
+            return None
+        try:
+            r = _SESSION.get(url, headers={"User-Agent": OZB_UA, "Accept": "application/json"}, timeout=(5, 8))
+            time.sleep(0.7)
+        except requests.RequestException:
+            _REDDIT["until"] = time.time() + 600
+            return None
+        if r.status_code in (401, 403, 429):
+            _REDDIT["until"] = time.time() + 1800
+            return None
+        if r.status_code != 200:
+            return None
+        try:
+            posts = [c["data"] for c in r.json()["data"]["children"]]
+        except (ValueError, KeyError, TypeError):
+            return None
+    pos = neg = 0.0
+    used = 0
+    need = max(1, int(len(toks) * 0.6 + 0.99))
+    for p in posts:
+        text = f"{p.get('title', '')} {(p.get('selftext') or '')[:700]}"
+        nt = norm(text)
+        if sum(1 for t in toks if t in nt) < need:
+            continue
+        low = text.lower()
+        w = 1 + math.log1p(max(0, int(p.get("score") or 0)))
+        used += 1
+        pos += w * sum(1 for x in _POS if x in low)
+        neg += w * sum(1 for x in _NEG if x in low)
+    if used < 3 or pos + neg == 0:
+        return None
+    share = pos / (pos + neg)
+    return ("positive" if share >= 0.65 else "negative" if share <= 0.4 else "mixed"), used
+
+
+def _cached(con, key: str):
+    r = con.execute("SELECT * FROM reviews WHERE key=? AND at>?", (key, time.time() - REVIEW_TTL)).fetchone()
+    return r
+
+
+def review_info_for(o: Offer) -> dict:
+    """{'rating','count','reddit','rposts'} for one offer (None where unknown). Uses a 7-day cache."""
+    con = db()
+    info = {"rating": None, "count": 0, "reddit": None, "rposts": 0, "pr": None}
+    ukey = "u:" + o.url
+    row = _cached(con, ukey)
+    if row is not None:
+        info["rating"], info["count"] = row["rating"], row["count"] or 0
+    elif o.source != "ozb":
+        rating = None
+        try:
+            rating = parse_rating(fetch(o.url, timeout=(4, 7)))
+        except FetchError:
+            pass
+        info["rating"], info["count"] = (rating or (None, 0))
+        con.execute("INSERT OR REPLACE INTO reviews(key,rating,count,at) VALUES(?,?,?,?)",
+                    (ukey, info["rating"], info["count"], time.time()))
+        con.commit()
+    q = keywords_from_title(o.title)
+    if q:
+        pkey = "p:" + norm(q)
+        row = _cached(con, pkey)
+        if row is not None:
+            info["pr"] = (row["rating"], row["count"] or 0) if row["rating"] else None
+        else:
+            pr = productreview_rating(q)
+            con.execute("INSERT OR REPLACE INTO reviews(key,rating,count,at) VALUES(?,?,?,?)",
+                        (pkey, pr[0] if pr else None, pr[1] if pr else 0, time.time()))
+            con.commit()
+            info["pr"] = pr
+        rkey = "r:" + norm(q)
+        row = _cached(con, rkey)
+        if row is not None:
+            info["reddit"], info["rposts"] = row["label"], row["n"] or 0
+        else:
+            res = reddit_sentiment(q)
+            if _REDDIT["until"] <= time.time():        # only remember real answers, not "Reddit said no"
+                con.execute("INSERT OR REPLACE INTO reviews(key,label,n,at) VALUES(?,?,?,?)",
+                            (rkey, res[0] if res else None, res[1] if res else 0, time.time()))
+                con.commit()
+            if res:
+                info["reddit"], info["rposts"] = res
+    return info
+
+
+def review_verdict(info: dict | None, price: float | None = None, typical: float | None = None) -> tuple[str | None, str]:
+    """(tone, short text) tone: good | ok | poor | None (nothing known)."""
+    if not info:
+        return None, ""
+    r, n, lab = info.get("rating"), info.get("count") or 0, info.get("reddit")
+    pr = info.get("pr")
+    parts = []
+    if r:
+        parts.append(f"\u2605 {r:.1f}" + (f" ({n:,})" if n else ""))
+    elif pr:
+        r, n = pr
+        parts.append(f"ProductReview \u2605 {r:.1f}" + (f" ({n:,})" if n else ""))
+    if lab:
+        parts.append(f"Reddit {lab}")
+    if not parts:
+        return None, ""
+    bad = (r is not None and n >= 5 and r < 3.5) or lab == "negative"
+    good = (r is not None and n >= 5 and r >= 4.2 and lab != "negative") or (lab == "positive" and (r is None or r >= 3.8))
+    tone = "poor" if bad else "good" if good else "ok"
+    if tone == "poor" and price and typical and price >= 1.2 * typical:
+        parts.append("pricey for what it is")
+    elif tone == "poor":
+        parts.insert(0, "Poor reviews")
+    return tone, "  \u00b7  ".join(parts)
+
+
+def passes_reviews(mode: str, info: dict | None, unknown_ok: bool) -> bool:
+    if mode in ("Off", "Show ratings"):
+        return True
+    tone, _ = review_verdict(info)
+    if mode == "Hide poor reviews":
+        return tone != "poor"
+    if mode == "Only 4 stars and up":
+        if not info or tone is None:
+            return unknown_ok
+        r, n = info.get("rating"), info.get("count") or 0
+        if r is None and info.get("pr"):
+            r, n = info["pr"]
+        return (r is not None and r >= 4.0 and n >= 3) or (r is None and info.get("reddit") == "positive")
+    return True
+
+
+def check_reviews(offers: list[Offer], cb=None, limit: int = 30, workers: int = 6):
+    """Look up ratings for the first `limit` distinct offers. cb(offer, info) is called as each one finishes."""
+    seen, todo = set(), []
+    for o in offers:
+        if o.url not in seen:
+            seen.add(o.url)
+            todo.append(o)
+        if len(todo) >= limit:
+            break
+
+    def one(o):
+        try:
+            info = review_info_for(o)
+        except Exception:  # noqa: BLE001
+            info = {"rating": None, "count": 0, "reddit": None, "rposts": 0}
+        if cb:
+            cb(o, info)
+
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        list(ex.map(one, todo))
+
+
+# --------------------------------------------------------------------------- #
+# Price history for everything we see, "was price" sanity check
+# --------------------------------------------------------------------------- #
+def record_seen(con, offers: list[Offer], now: float | None = None):
+    now = now or time.time()
+    urls = [o.url for o in offers]
+    last: dict[str, tuple[float, float]] = {}
+    for i in range(0, len(urls), 400):
+        chunk = urls[i:i + 400]
+        q = ("SELECT s.url, s.price, s.at FROM seen s JOIN (SELECT url, MAX(at) m FROM seen WHERE url IN (%s) GROUP BY url) t "
+             "ON s.url=t.url AND s.at=t.m" % ",".join("?" * len(chunk)))
+        for r in con.execute(q, chunk):
+            last[r["url"]] = (r["price"], r["at"])
+    rows = []
+    for o in offers:
+        prev = last.get(o.url)
+        if prev is None or abs(prev[0] - o.price) > 0.004 or now - prev[1] > 20 * 3600:
+            rows.append((o.url, o.price, now))
+    if rows:
+        con.executemany("INSERT INTO seen(url,price,at) VALUES(?,?,?)", rows)
+        con.commit()
+
+
+def history_stats(con, urls, days: int = 180) -> dict:
+    """{url: {'min','max','n','span','median'}} from every price we have seen for these pages."""
+    urls, out, since = list(urls), {}, time.time() - days * 86400
+    for i in range(0, len(urls), 400):
+        chunk = urls[i:i + 400]
+        q = "SELECT url, price, at FROM seen WHERE at>? AND url IN (%s)" % ",".join("?" * len(chunk))
+        rows: dict[str, list] = {}
+        for r in con.execute(q, (since, *chunk)):
+            rows.setdefault(r["url"], []).append((r["price"], r["at"]))
+        for u, lst in rows.items():
+            ps = sorted(p for p, _ in lst)
+            ts = [t for _, t in lst]
+            out[u] = {"min": ps[0], "max": ps[-1], "n": len(lst), "span": (max(ts) - min(ts)) / 86400,
+                      "median": ps[len(ps) // 2], "series": [p for p, _ in sorted(lst, key=lambda x: x[1])][-14:]}
+    return out
+
+
+def price_verdict(o: Offer, st: dict | None) -> tuple[str | None, str]:
+    """('lowest' | 'inflated' | None, text) from what we've seen this page charge before."""
+    if not st or o.source == "ozb":
+        return None, ""
+    if st["n"] >= 3 and st["span"] >= 2 and o.price <= st["min"] + 0.005 and st["max"] > o.price * 1.03:
+        return "lowest", f"Lowest price seen in {max(3, round(st['span']))} days"
+    if o.was_price and st["n"] >= 4 and st["span"] >= 7 and st["max"] <= o.price * 1.04:
+        return "inflated", "Was price unverified - never seen higher"
+    return None, ""
+
+
+# --------------------------------------------------------------------------- #
+# Same product at several stores, price-match hints, cashback
+# --------------------------------------------------------------------------- #
+def model_key(title: str) -> str | None:
+    """'wh1000xm5|sony' style key when the title has a real model code (letters + digits), else None."""
+    toks = _tokens(title)
+    models = sorted({norm(t) for t in toks if any(c.isdigit() for c in t) and any(c.isalpha() for c in t)
+                     and len(norm(t)) >= 4 and not re.fullmatch(r"\d+(?:gb|tb|mm|cm|hz|w|v|inch|in|k|mah|l|kg|g)", norm(t))})
+    if not models:
+        return None
+    brand = next((norm(t) for t in toks if _is_brand(t)), "")
+    return brand + "|" + "|".join(models[:2])
+
+
+def group_offers(offers: list[Offer]) -> list[Offer]:
+    """One entry per product: the cheapest listing, with `.others` = the same product at other stores."""
+    groups: dict[str, list[Offer]] = {}
+    out: list[tuple[int, Offer]] = []
+    for idx, o in enumerate(offers):
+        k = None if (o.accessory or o.used or o.source == "ozb") else model_key(o.title)
+        o.others = []
+        if k is None:
+            out.append((idx, o))
+        elif k in groups:
+            groups[k].append(o)
+        else:
+            groups[k] = [o]
+            out.append((idx, o))
+    result = []
+    for idx, o in out:
+        k = None if (o.accessory or o.used or o.source == "ozb") else model_key(o.title)
+        mem = groups.get(k) if k else None
+        if mem and len(mem) > 1:
+            same_store = {}
+            for m in sorted(mem, key=lambda m: (m.oos, m.price)):
+                same_store.setdefault(m.store, m)          # one listing per store
+            lst = list(same_store.values())
+            prim = lst[0]
+            prim.others = lst[1:]
+            result.append(prim)
+        else:
+            result.append(o)
+    return result
+
+
+PRICE_MATCH = {"Officeworks": "says it will beat a lower competitor price", "Bunnings": "says it will beat a lower competitor price",
+               "JB Hi-Fi": "says it will match a lower price", "The Good Guys": "says it will match a lower price",
+               "Harvey Norman": "says it will match a lower price", "Bing Lee": "says it will match a lower price",
+               "Big W": "says it will match a lower price", "Target AU": "says it will match a lower price",
+               "Kmart": "has a limited price-match policy", "Appliances Online": "says it will match a lower price"}
+
+
+def price_match_hint(store: str) -> str | None:
+    base = re.sub(r"^OzBargain:\s*", "", store)
+    for k, v in PRICE_MATCH.items():
+        if k.lower() in base.lower():
+            return f"{k} {v} (check current terms and exclusions)"
+    return None
+
+
+def effective_price(price: float, cashback_pct: float) -> float:
+    return price * (1 - max(0.0, min(cashback_pct, 50.0)) / 100)
+
+
+def value_score(o: Offer, info: dict | None) -> float:
+    """Lower sorts first: well-reviewed and cheap wins. Rating is pulled towards 3.5 when there are few reviews."""
+    if not info or not (info.get("rating") or info.get("pr")):
+        return 1e9 + o.price
+    r, n = info.get("rating"), info.get("count") or 0
+    if r is None:
+        r, n = info["pr"]
+    bayes = (r * n + 3.5 * 10) / (n + 10)
+    return -((bayes - 2.5) / math.sqrt(max(o.price, 1.0)))
+
+
+def productreview_rating(query: str) -> tuple[float, int] | None:
+    """Best effort: ProductReview.com.au is the main Australian review site. Returns (rating, reviews) or None."""
+    try:
+        page = fetch("https://www.productreview.com.au/search?q=" + quote_plus(query), timeout=(4, 7))
+        m = re.search(r'href=["\'](/listings/[a-z0-9\-]+)["\']', page)
+        if not m:
+            return None
+        return parse_rating(fetch("https://www.productreview.com.au" + m.group(1), timeout=(4, 7)))
+    except FetchError:
+        return None
+
+
+# --------------------------------------------------------------------------- #
+# Reported listings, backups, export, run-at-startup, sale seasons
+# --------------------------------------------------------------------------- #
+def hidden_url_set(con) -> set[str]:
+    return {r["url"] for r in con.execute("SELECT url FROM hidden_urls")}
+
+
+def unhide_listing(con, url: str):
+    con.execute("DELETE FROM hidden_urls WHERE url=?", (url,))
+    con.commit()
+    _HIDDEN_CACHE.clear() if "_HIDDEN_CACHE" in globals() else None
+
+
+def hide_listing(con, o: Offer, correct: float | None = None):
+    """The user says this listing's price is wrong: log it and stop showing it."""
+    con.execute("INSERT OR REPLACE INTO hidden_urls(url,store,title,price,correct,at) VALUES(?,?,?,?,?,?)",
+                (o.url, o.store, o.title, o.price, correct, time.time()))
+    con.commit()
+
+
+def export_csv(folder: str) -> list[str]:
+    con = db()
+    made = []
+    for name, sql in (("watchlist.csv", "SELECT keywords,max_price,min_drop_pct,best_price,best_store,best_title,best_url FROM watchlist"),
+                      ("price_history.csv", "SELECT url,price,datetime(at,'unixepoch','localtime') AS seen FROM seen ORDER BY at"),
+                      ("alerts.csv", "SELECT keywords,title,store,price,reasons,datetime(sent_at,'unixepoch','localtime') AS sent FROM alerts ORDER BY sent_at"),
+                      ("reported_prices.csv", "SELECT store,title,price,correct,url,datetime(at,'unixepoch','localtime') AS reported FROM hidden_urls")):
+        rows = con.execute(sql).fetchall()
+        path = os.path.join(folder, name)
+        with open(path, "w", newline="", encoding="utf-8") as f:
+            w = csv.writer(f)
+            if rows:
+                w.writerow(rows[0].keys())
+                w.writerows([tuple(r) for r in rows])
+            else:
+                w.writerow(["(nothing yet)"])
+        made.append(path)
+    return made
+
+
+def backup_db(dest: str):
+    con = db()
+    out = sqlite3.connect(dest)
+    with out:
+        con.backup(out)
+    out.close()
+
+
+def restore_db(src: str) -> bool:
+    """Replace the database with a backup (takes effect after a restart). False if the file isn't a Deals backup."""
+    try:
+        t = sqlite3.connect(src)
+        names = {r[0] for r in t.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        t.close()
+    except sqlite3.Error:
+        return False
+    if not {"watchlist", "stores", "settings"} <= names:
+        return False
+    shutil.copyfile(src, str(DB_PATH))
+    return True
+
+
+def _autostart_file() -> Path:
+    if sys.platform.startswith("win"):
+        return Path(os.environ.get("APPDATA", str(Path.home()))) / "Microsoft/Windows/Start Menu/Programs/Startup/Deals.bat"
+    if sys.platform == "darwin":
+        return Path.home() / "Library/LaunchAgents/au.deals.app.plist"
+    return Path.home() / ".config/autostart/deals.desktop"
+
+
+def autostart_enabled() -> bool:
+    return _autostart_file().exists()
+
+
+def set_autostart(on: bool, script: str | None = None):
+    """Start Deals (minimised) when you log in, so alerts keep working without you opening it."""
+    f = _autostart_file()
+    if not on:
+        try:
+            f.unlink()
+        except FileNotFoundError:
+            pass
+        return
+    script = script or str(Path(__file__).parent / "DealScraper.pyw")
+    py = sys.executable
+    f.parent.mkdir(parents=True, exist_ok=True)
+    if sys.platform.startswith("win"):
+        pyw = py[:-10] + "pythonw.exe" if py.lower().endswith("python.exe") else py
+        f.write_text(f'@echo off\r\ncd /d "{Path(script).parent}"\r\nstart "" "{pyw}" "{script}" --minimized\r\n', encoding="utf-8")
+    elif sys.platform == "darwin":
+        f.write_text(f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict><key>Label</key><string>au.deals.app</string>
+<key>ProgramArguments</key><array><string>{py}</string><string>{script}</string><string>--minimized</string></array>
+<key>RunAtLoad</key><true/></dict></plist>
+""", encoding="utf-8")
+    else:
+        f.write_text(f"[Desktop Entry]\nType=Application\nName=Deals\nExec={py} {script} --minimized\n", encoding="utf-8")
+
+
+def sale_season(now: float | None = None) -> str | None:
+    """A heads-up during the big Australian sale periods, when 'was' prices are most often inflated."""
+    t = time.localtime(now or time.time())
+    md = (t.tm_mon, t.tm_mday)
+    if (11, 15) <= md <= (12, 3):
+        return "Black Friday / Cyber Monday: 'was' prices are often inflated at this time of year. Trust the price-history line on each card."
+    if md >= (12, 24) or md <= (1, 6):
+        return "Boxing Day / New Year sales: check the price-history line on each card before trusting a 'was' price."
+    if (6, 10) <= md <= (7, 5):
+        return "End of financial year sales: check the price-history line on each card before trusting a 'was' price."
+    return None
+
+
+# --------------------------------------------------------------------------- #
+# Typo-tolerant search: work out what the user meant
+# --------------------------------------------------------------------------- #
+VOCAB_EXTRA = set("""oled qled uhd hdmi earphones earphone headset webcam tripod gimbal adapter dock router modem extender mesh
+powerboard lightbulb thermostat doorbell vacuum mop steamer iron kettle toaster blender juicer grill sandwich cooker slowcooker
+freezer fridge dishwasher dryer washer heater cooler dehumidifier humidifier purifier mattress topper pillow quilt doona sheets
+towels curtain blinds lamp chair desk bookshelf wardrobe trampoline scooter helmet skateboard bicycle treadmill rowing dumbbell
+bench protein creatine vitamin shampoo conditioner perfume mascara lipstick skincare sunscreen razor trimmer shaver toothbrush
+nappies wipes stroller carseat highchair lego puzzle boardgame playstation xbox nintendo controller keyboard monitor laptop
+tablet smartphone television projector printer scanner speaker soundbar subwoofer turntable microphone amplifier camera lens
+drone smartwatch bracelet earbuds airpods macbook chromebook notebook ultrabook gaming console wireless bluetooth portable
+electric cordless rechargeable waterproof stainless""".split())
+VOCAB_EXTRA |= set("""television monitors laptops notebooks computer computers desktop keyboard keyboards mouse mice headphones
+earbuds speakers soundbar refrigerator refrigerators fridge freezer dishwasher dishwashers washing machine dryer microwave
+oven cooktop rangehood airfryer fryer blender toaster kettle coffee espresso grinder vacuum cleaner robot mattress pillow
+bedding furniture sofa couch recliner wardrobe drawers bookcase treadmill dumbbells exercise bicycle scooter helmet camping
+tent sleeping backpack luggage suitcase sunglasses watch watches jewellery necklace bracelet perfume fragrance cologne
+skincare moisturiser sunscreen shampoo toothbrush electric shaver trimmer straightener hairdryer hair dryer drill drills
+grinder sander chainsaw lawnmower mower trimmer whipper snipper blower pressure washer generator ladder toolbox workbench
+battery batteries charger charging cable cables adapter powerbank storage drive harddrive flash memory graphics processor
+motherboard router modem wifi network switch printer toner cartridge scanner projector screen webcam microphone gaming
+console controller playstation xbox nintendo switch steam deck headset chair desk lego puzzle trampoline playset pram
+stroller carseat nappies formula toys dolls figures bluetooth wireless wired portable cordless rechargeable waterproof
+smart android iphone ipad macbook galaxy pixel airpods apple samsung sony panasonic philips bosch dyson miele electrolux
+breville delonghi kenwood tefal sunbeam logitech razer corsair asus acer lenovo huawei xiaomi oppo nokia motorola garmin
+fitbit gopro canon nikon fujifilm olympus sigma tamron anker belkin netgear tplink ubiquiti synology seagate western
+digital kingston sandisk crucial nvidia radeon intel ryzen thermaltake cooler master noctua""".split())
+_VOCAB_CACHE: dict = {"at": 0.0, "words": {}}
+
+
+def learn_vocab(con, offers: list[Offer]):
+    """Remember the product words shops use, so spelling fixes know about them."""
+    words: dict[str, int] = {}
+    for o in offers:
+        for w in set(re.findall(r"[a-z]{4,}", o.title.lower())):
+            words[w] = words.get(w, 0) + 1
+    if words:
+        con.executemany("INSERT INTO vocab(word,n) VALUES(?,?) ON CONFLICT(word) DO UPDATE SET n=n+excluded.n",
+                        list(words.items()))
+        con.commit()
+
+
+def _vocabulary(con) -> dict[str, int]:
+    """word -> weight (higher = more trusted)."""
+    now = time.time()
+    if now - _VOCAB_CACHE["at"] < 60 and _VOCAB_CACHE["words"]:
+        return _VOCAB_CACHE["words"]
+    v: dict[str, int] = {}
+    for w in VOCAB_EXTRA:
+        v[w] = 3
+    for w in WORD_CATS:
+        v[w] = 5
+    for w in list(SYNONYMS) + [x for xs in SYNONYMS.values() for x in xs]:
+        v.setdefault(norm(w), 3)
+    for b in list(BRANDS) + list(BRAND_ALIASES):
+        v[norm(b)] = 8
+    try:
+        for r in con.execute("SELECT word, n FROM vocab WHERE n>=3 ORDER BY n DESC LIMIT 8000"):
+            v[r["word"]] = max(v.get(r["word"], 0), min(r["n"], 20))
+        for r in con.execute("SELECT keywords FROM watchlist"):
+            for w in re.findall(r"[a-z]{4,}", r["keywords"].lower()):
+                v[w] = max(v.get(w, 0), 10)
+    except sqlite3.Error:
+        pass
+    _VOCAB_CACHE.update(at=now, words=v)
+    return v
+
+
+def _dl(a: str, b: str, limit: int) -> int:
+    """Edit distance counting a swap of two neighbouring letters as one mistake (so 'samsnug' is 1 away from 'samsung')."""
+    if abs(len(a) - len(b)) > limit:
+        return limit + 1
+    prev2, prev = None, list(range(len(b) + 1))
+    for i in range(1, len(a) + 1):
+        cur = [i] + [0] * len(b)
+        for j in range(1, len(b) + 1):
+            cost = 0 if a[i - 1] == b[j - 1] else 1
+            cur[j] = min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost)
+            if i > 1 and j > 1 and a[i - 1] == b[j - 2] and a[i - 2] == b[j - 1]:
+                cur[j] = min(cur[j], prev2[j - 2] + 1)
+        prev2, prev = prev, cur
+    return prev[-1]
+
+
+def _fix_word(w: str, vocab: dict[str, int], aggressive: bool) -> str | None:
+    if len(w) < 4 or w in vocab or w.rstrip("s") in vocab or w + "s" in vocab or w.endswith("es") and w[:-2] in vocab:
+        return None
+    limit = 2 if (len(w) >= 7 or aggressive) else 1
+    best, key = None, None
+    for cand, wt in vocab.items():
+        if abs(len(cand) - len(w)) > limit or len(cand) < 4 or (len(w) == 4 and wt < 3):
+            continue
+        d = _dl(w, cand, limit)
+        if d > limit or (d == 2 and cand[0] != w[0]):
+            continue
+        k = (d, -wt)
+        if key is None or k < key:
+            best, key = cand, k
+    return best
+
+
+def correct_query(text: str, aggressive: bool = False) -> tuple[str, list[tuple[str, str]]]:
+    """Fix likely typos in a search ('samsnug galxy' -> 'samsung galaxy', 'play station' -> 'playstation').
+    Model numbers, excluded words and anything we don't recognise are left alone. Returns (text, [(was, now)])."""
+    inc, exc = parse_keywords(text)
+    if not inc:
+        return text, []
+    vocab = _vocabulary(db())
+    changes: list[tuple[str, str]] = []
+    out: list[str] = []
+    i = 0
+    while i < len(inc):
+        tok = inc[i]
+        low = re.sub(r"[^a-z]", "", tok.lower())
+        pure = tok.isalpha()
+        if pure and i + 1 < len(inc) and inc[i + 1].isalpha():      # 'play station' -> 'playstation'
+            joined = (tok + inc[i + 1]).lower()
+            if joined in vocab and tok.lower() not in vocab and inc[i + 1].lower() not in vocab:
+                changes.append((f"{tok} {inc[i + 1]}", joined))
+                out.append(joined)
+                i += 2
+                continue
+        if pure and " " not in tok:
+            fixed = _fix_word(low, vocab, aggressive)
+            if fixed and fixed != low:
+                changes.append((tok, fixed))
+                tok = fixed
+        out.append(tok)
+        i += 1
+    if not changes:
+        return text, []
+    q = lambda t: f'"{t}"' if " " in t else t
+    return " ".join([q(t) for t in out] + ["-" + x for x in exc]), changes
+
+
+# --------------------------------------------------------------------------- #
+# Paste a product link: read it, then look for it everywhere else
+# --------------------------------------------------------------------------- #
+def did_you_mean(query: str, words: dict[str, int]) -> str | None:
+    """When a search finds little: the shops' own search often still returns products for a misspelled word
+    (they match loosely, we filter strictly). Look at the words in those listings and swap in the closest one."""
+    if not words:
+        return None
+    inc, exc = parse_keywords(query)
+    vocab = _vocabulary(db())
+    out, changed = [], False
+    for tok in inc:
+        low = tok.lower()
+        if not tok.isalpha() or len(low) < 4 or low in words or low + "s" in words or low.rstrip("s") in words:
+            out.append(tok)
+            continue
+        limit = 2 if len(low) >= 5 else 1
+        best, key = None, None
+        for cand, n in words.items():
+            if abs(len(cand) - len(low)) > limit or len(cand) < 4:
+                continue
+            d = _dl(low, cand, limit)
+            if d > limit or (d == 2 and cand[0] != low[0]):
+                continue
+            k = (d, -n - (3 if cand in vocab else 0))
+            if key is None or k < key:
+                best, key = cand, k
+        if best and best != low and words[best] >= 2:
+            out.append(best)
+            changed = True
+        else:
+            out.append(tok)
+    if not changed:
+        return None
+    q = lambda t: f'"{t}"' if " " in t else t
+    return " ".join([q(t) for t in out] + ["-" + x for x in exc])
+
+
+def is_url(text: str) -> bool:
+    return bool(re.match(r"(?i)^\s*https?://\S+\s*$", text or ""))
+
+
+def _store_name_for(url: str) -> str:
+    host = urlparse(url).netloc.lower().removeprefix("www.")
+    for lst in CATALOG.values():
+        for name, tpl in lst:
+            h = urlparse(tpl.replace("{query}", "x")).netloc.lower().removeprefix("www.")
+            if h and (h == host or host.endswith("." + h) or h.endswith("." + host)):
+                return name
+    return host
+
+
+def _product_node(n):
+    if isinstance(n, list):
+        for x in n:
+            r = _product_node(x)
+            if r:
+                return r
+    elif isinstance(n, dict):
+        t = n.get("@type")
+        if "Product" in (t if isinstance(t, list) else [t]) and n.get("name"):
+            return n
+        for v in n.values():
+            if isinstance(v, (dict, list)):
+                r = _product_node(v)
+                if r:
+                    return r
+    return None
+
+
+def parse_product_page(page: str, url: str) -> dict:
+    """Best-effort: {'title','price','was','brand','model','image'} from a product page."""
+    soup = make_soup(page)
+    info = {"title": None, "price": None, "was": None, "brand": None, "model": None, "image": None,
+            "url": url, "store": _store_name_for(url)}
+    node = None
+    for tag in soup.find_all("script", type="application/ld+json"):
+        try:
+            node = _product_node(json.loads(tag.get_text()))
+        except (json.JSONDecodeError, TypeError):
+            node = None
+        if node:
+            break
+    if node:
+        info["title"] = str(node["name"]).strip()
+        b = node.get("brand")
+        info["brand"] = (b.get("name") if isinstance(b, dict) else b) if b else None
+        info["model"] = node.get("mpn") or node.get("model") if isinstance(node.get("model"), str) or node.get("mpn") else None
+        info["image"] = _first_image(node.get("image"), url)
+        offers = node.get("offers") or []
+        for o in offers if isinstance(offers, list) else [offers]:
+            if isinstance(o, dict):
+                v = parse_price(str(o.get("price", o.get("lowPrice"))) if o.get("price", o.get("lowPrice")) is not None else None)
+                if v:
+                    info["price"] = v
+                    break
+    if not info["title"]:
+        m = soup.find("meta", property="og:title") or soup.find("meta", attrs={"name": "twitter:title"})
+        h1 = soup.find("h1")
+        info["title"] = ((m.get("content") if m else None) or (h1.get_text(" ", strip=True) if h1 else None)
+                         or (soup.title.get_text(" ", strip=True) if soup.title else None))
+        if info["title"]:
+            info["title"] = re.split(r"\s[|\u2013\u2014-]\s(?=[A-Z])", info["title"])[0].strip()
+    if not info["image"]:
+        m = soup.find("meta", property="og:image")
+        info["image"] = urljoin(url, m["content"]) if m and m.get("content") else None
+    if not info["price"]:
+        for prop in ("product:price:amount", "og:price:amount", "twitter:data1"):
+            m = soup.find("meta", property=prop) or soup.find("meta", attrs={"name": prop})
+            v = parse_price(m.get("content")) if m and m.get("content") else None
+            if v:
+                info["price"] = v
+                break
+    if not info["price"]:
+        h1 = soup.find("h1")
+        node2 = h1
+        for _ in range(5):                              # the price block sits near the product heading
+            if node2 is None or node2.parent is None or node2.name in ("body", "html"):
+                break
+            node2 = node2.parent
+            sp, sw = _structured_price(node2)
+            if sp:
+                info["price"], info["was"] = sp, sw
+                break
+            txt = _capped_text(node2, 1500)
+            vals = _pick_prices(txt) if txt else []
+            if vals:
+                info["price"] = vals[0]
+                info["was"] = vals[-1] if len(vals) > 1 and vals[-1] > vals[0] * 1.02 else None
+                break
+    return info
+
+
+def compact_query(info: dict) -> str:
+    """A search that other shops will match: brand + model code + product type (not the whole marketing title)."""
+    title = info.get("title") or ""
+    toks = _tokens(title)
+    models = []
+    for t in toks:
+        n = norm(t)
+        if any(c.isdigit() for c in t) and any(c.isalpha() for c in t) and len(n) >= 4 and n not in models \
+                and not re.fullmatch(r"\d+(?:gb|tb|mm|cm|hz|w|v|inch|in|k|mah|l|kg|g)", n):
+            models.append(n if "-" not in t else t)
+    mpn = info.get("model")
+    if mpn and isinstance(mpn, str) and 4 <= len(mpn) <= 24 and norm(mpn) not in [norm(m) for m in models]:
+        models.append(mpn)
+    brand = info.get("brand") or next((t for t in toks if _is_brand(t)), "")
+    types = _type_words(title)[:1]
+    if models:
+        return " ".join(x for x in [brand, *models[:2], *types] if x).strip()
+    return keywords_from_title(title)
+
+
+def product_from_url(url: str, cfg: dict | None = None) -> dict:
+    """Read a product page and work out what it is. Raises FetchError when the page can't be read."""
+    cfg = cfg or {}
+    use_b = browser_wanted(cfg)
+    rendered = False
+    try:
+        page = fetch(url, timeout=(6, 10))
+    except FetchError as e:
+        if e.kind != "blocked" or not use_b:
+            raise
+        page, rendered = BROWSER.render(url), True
+    info = parse_product_page(page, url)
+    if (not info["title"] or not info["price"]) and use_b and not rendered:
+        try:
+            info2 = parse_product_page(BROWSER.render(url), url)
+            info = {**info, **{k: v for k, v in info2.items() if v}}
+        except FetchError:
+            pass
+    if not info["title"]:
+        raise FetchError("error", "couldn't find a product on that page")
+    info["query"] = compact_query(info)
+    return info
