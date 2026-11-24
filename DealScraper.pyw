@@ -21,7 +21,37 @@ from concurrent.futures import ThreadPoolExecutor
 
 import tkinter as tk
 from tkinter import font as tkfont
-from tkinter import filedialog, messagebox
+from tkinter import filedialog
+from tkinter import messagebox as _native_mb
+
+
+class _ThemedMessages:
+    """Drop-in for tkinter.messagebox that uses Deals' own black-and-white dialogs once the window exists."""
+    app = None
+
+    def _go(self, kind, title, message, **kw):
+        app = self.app
+        try:
+            if app is not None and app.winfo_exists():
+                return MsgDialog(app, kind, str(title), str(message), kw.get("parent")).result
+        except Exception:  # noqa: BLE001
+            pass
+        return getattr(_native_mb, kind)(title, message, **{k: v for k, v in kw.items() if k == "parent"})
+
+    def showinfo(self, title, message, **kw):
+        return self._go("showinfo", title, message, **kw)
+
+    def showwarning(self, title, message, **kw):
+        return self._go("showwarning", title, message, **kw)
+
+    def showerror(self, title, message, **kw):
+        return self._go("showerror", title, message, **kw)
+
+    def askyesno(self, title, message, **kw):
+        return self._go("askyesno", title, message, **kw)
+
+
+messagebox = _ThemedMessages()
 
 FROZEN = bool(getattr(sys, "frozen", False))                 # running as the packaged Deals.exe
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -124,7 +154,7 @@ def ensure_deps():
 ensure_deps()
 import engine as E  # noqa: E402
 
-if getattr(E, "ENGINE_VERSION", 0) < 33:
+if getattr(E, "ENGINE_VERSION", 0) < 34:
     _r = tk.Tk()
     _r.withdraw()
     messagebox.showerror("Deals", "engine.py is out of date.\n\nReplace it with the new engine.py from the "
@@ -293,6 +323,74 @@ def tip_for(label):
         if low == key or (len(key) > 6 and low.startswith(key)):
             return tip
     return None
+
+
+class MsgDialog(tk.Toplevel):
+    """A themed message / question box. kind: showinfo | showwarning | showerror | askyesno."""
+
+    def __init__(self, app, kind, title, message, parent=None):
+        host = parent if parent is not None and parent.winfo_exists() else app
+        super().__init__(host)
+        self.result = False if kind == "askyesno" else "ok"
+        self.withdraw()
+        P = app.P
+        self.title(ui.cap(title))
+        self.transient(host)
+        self.resizable(False, False)
+        app.reg(self, "window")
+        body = app.frame(self)
+        body.pack(fill="both", expand=True, padx=px(26), pady=px(22))
+        tone = P["alert"] if kind == "showerror" else P["fg"]
+        head = tk.Label(body, text=ui.cap(title), font=app.f_big, bg=P["bg"], fg=tone, anchor="w", justify="left",
+                        wraplength=px(460))
+        head.pack(anchor="w")
+        long_text = len(message) > 700 or message.count("\n") > 14
+        if long_text:
+            box = tk.Frame(body, bg=P["bg"])
+            box.pack(fill="both", expand=True, pady=(px(10), 0))
+            txt = tk.Text(box, wrap="word", font=app.f_norm, bg=P["bg"], fg=P["fg"], bd=0, highlightthickness=0,
+                          width=62, height=18, padx=0, pady=0, spacing3=px(3), insertwidth=0,
+                          selectbackground=P["fg"], selectforeground=P["bg"])
+            sb = ui.SlimScrollbar(app, box, txt.yview)
+            txt.configure(yscrollcommand=sb.set)
+            sb.pack(side="right", fill="y")
+            txt.pack(side="left", fill="both", expand=True)
+            txt.insert("1.0", message)
+            txt.configure(state="disabled")
+            txt.bind("<MouseWheel>", lambda e: txt.yview_scroll(-1 if e.delta > 0 else 1, "units"))
+        else:
+            tk.Label(body, text=message, font=app.f_norm, bg=P["bg"], fg=P["fg"] if kind != "showinfo" else P["fg"],
+                     anchor="w", justify="left", wraplength=px(460)).pack(anchor="w", pady=(px(10), 0))
+        bar = app.frame(body)
+        bar.pack(anchor="e", pady=(px(20), 0), fill="x")
+        if kind == "askyesno":
+            app.button(bar, "Yes", lambda: self._done(True), pad=(24, 7), style="solid", font=app.f_bold).pack(side="right")
+            app.button(bar, "No", lambda: self._done(False), pad=(22, 7), style="outline").pack(side="right", padx=(0, 8))
+            esc = lambda e=None: self._done(False)  # noqa: E731
+        else:
+            app.button(bar, "OK", lambda: self._done("ok"), pad=(28, 7), style="solid", font=app.f_bold).pack(side="right")
+            esc = lambda e=None: self._done("ok")  # noqa: E731
+        self.bind("<Return>", lambda e: self._done(True if kind == "askyesno" else "ok"))
+        self.bind("<Escape>", esc)
+        self.protocol("WM_DELETE_WINDOW", esc)
+        self.update_idletasks()
+        w, h = self.winfo_reqwidth(), self.winfo_reqheight()
+        ref = host if host.winfo_viewable() else app
+        x = ref.winfo_rootx() + max(0, (ref.winfo_width() - w) // 2)
+        y = ref.winfo_rooty() + max(0, (ref.winfo_height() - h) // 3)
+        self.geometry(f"+{max(0, x)}+{max(0, y)}")
+        self.deiconify()
+        try:
+            self.wait_visibility()
+            self.grab_set()
+            self.focus_force()
+        except tk.TclError:
+            pass
+        self.wait_window(self)
+
+    def _done(self, value):
+        self.result = value
+        self.destroy()
 
 
 class Pop:
@@ -954,6 +1052,7 @@ class TextDialog(tk.Toplevel):
 class App(tk.Tk):
     def __init__(self):
         super().__init__()
+        messagebox.app = self
         ui.init_scale(self)                      # screen scale (1.0 = 96 dpi) for crisp, correctly sized UI
         ui.patch_geometry()
         self.title("Deals")
