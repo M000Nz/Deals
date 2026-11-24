@@ -154,7 +154,7 @@ def ensure_deps():
 ensure_deps()
 import engine as E  # noqa: E402
 
-if getattr(E, "ENGINE_VERSION", 0) < 42:
+if getattr(E, "ENGINE_VERSION", 0) < 43:
     _r = tk.Tk()
     _r.withdraw()
     messagebox.showerror("Deals", "engine.py is out of date.\n\nReplace it with the new engine.py from the "
@@ -2643,7 +2643,7 @@ class App(tk.Tk):
                         im.draft("RGB", (self.iw * 2, self.ih * 2))
                     except Exception:  # noqa: BLE001
                         pass
-                    if min(im.size) < 42:                   # a tracking pixel or icon, not a product photo
+                    if min(im.size) < 43:                   # a tracking pixel or icon, not a product photo
                         why.append("too small (placeholder?)")
                         continue
                     return self._prepare(im)
@@ -2820,6 +2820,27 @@ class App(tk.Tk):
                 w.bind("<Button-1>", lambda e, u=r["url"]: self.open_url(u))
                 w.configure(cursor="hand2")
 
+    def mini_change(self, parent, prev, now, sym):
+        """Tiny graph of just the move since the previous check: green line down = cheaper, red line up = dearer."""
+        P = self.P
+        col = P["accent"] if now < prev - 0.005 else P["alert"] if now > prev + 0.005 else P["muted"]
+        w, h, pad = px(46), px(22), px(5)
+        cv = self.reg(tk.Canvas(parent, width=w, height=h, bd=0, highlightthickness=0), "canvas")
+        cv.pack(side="left", padx=(14, 6))
+        y1, y2 = (h / 2, h / 2) if now == prev else ((pad, h - pad) if now < prev else (h - pad, pad))
+        cv.create_line(pad, y1, w - pad, y2, fill=col, width=2, capstyle="round")
+        r = px(2)
+        cv.create_oval(pad - r, y1 - r, pad + r, y1 + r, fill=P["bg"], outline=col)
+        cv.create_oval(w - pad - r, y2 - r, w - pad + r, y2 + r, fill=col, outline=col)
+        if abs(now - prev) < 0.005:
+            txt = "no change"
+        else:
+            pct = 100 * abs(now - prev) / prev if prev else 0
+            sign = "\u25bc" if now < prev else "\u25b2"
+            txt = f"{sign} {E.money(sym, abs(now - prev))} ({pct:.0f}%)"
+        self.label(parent, txt, "accent" if col == P["accent"] else "alert" if col == P["alert"] else "muted",
+                   font=self.f_small).pack(side="left")
+
     def fold_watch(self, ids, fold, render=True):
         for i in ids:
             (self.watch_folded.add if fold else self.watch_folded.discard)(i)
@@ -2934,6 +2955,9 @@ class App(tk.Tk):
                            font=self.f_small).pack(side="left")
             if r["max_price"] is not None and r["best_price"] is not None and r["best_price"] <= r["max_price"]:
                 self.label(row, "   \u2605 at target", "accent", font=self.f_small_b).pack(side="left")
+            hist = E.price_history(con, r["id"])
+            if len(hist) >= 2:
+                self.mini_change(row, hist[-2]["price"], hist[-1]["price"], sym)
             for w in (arrow, name):
                 w.bind("<Button-1>", lambda e, i=r["id"]: self.fold_watch([i], False))
             return
