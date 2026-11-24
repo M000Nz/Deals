@@ -97,7 +97,7 @@ def ensure_deps():
 ensure_deps()
 import engine as E  # noqa: E402
 
-if getattr(E, "ENGINE_VERSION", 0) < 23:
+if getattr(E, "ENGINE_VERSION", 0) < 24:
     _r = tk.Tk()
     _r.withdraw()
     messagebox.showerror("Deals", "engine.py is out of date.\n\nReplace it with the new engine.py from the "
@@ -913,6 +913,7 @@ class App(tk.Tk):
             self.after(700, self.first_run_browser)
         self.after(150, self.pump)
         self.after(1000, self.tick)
+        self.after(5000, self.auto_update_check)
         self.after(60, self.style_window)
         self.set_icon()
         self.protocol("WM_DELETE_WINDOW", self.on_close)
@@ -1151,6 +1152,7 @@ class App(tk.Tk):
         self.picking, self.pick_cells, self._pick_cols, self.daily_shuffle = None, [], {}, None
         self.pick_sorts = {"daily": "Biggest savings", "foryou": "Newest"}
         self.cmp = []                                                    # products chosen for side-by-side compare
+        self._update_ov, self._updating = None, False
         self.watch_sort = E.get_settings(E.db()).get("watch_sort") or "Added"
         if self.watch_sort not in WATCH_SORTS:
             self.watch_sort = "Added"
@@ -2975,25 +2977,134 @@ class App(tk.Tk):
             self.set_status(f"checking for updates...  (you have version {E.ENGINE_VERSION})")
 
         def work():
-            latest, link = E.check_update(url)
-            self.q.put(lambda: self.update_result(latest, link, silent))
+            m = E.update_manifest(url)
+            self.q.put(lambda: self.update_result(m, silent))
         threading.Thread(target=work, daemon=True).start()
 
-    def update_result(self, latest, link, silent):
-        if latest is None:
-            self.set_status("ready")
+    def update_result(self, m, silent):
+        self.set_status("ready")
+        try:
+            E.set_setting(E.db(), "update_checked", str(time.time()))
+        except Exception:  # noqa: BLE001
+            pass
+        if m is None:
             return None if silent else messagebox.showinfo(
                 "updates", f"Couldn't read that update address.\n\nYou have version {E.ENGINE_VERSION}.")
-        self.set_status("ready")
+        latest = m["version"]
         if latest > E.ENGINE_VERSION:
-            self.toast(f"Update available: version {latest}  (you have {E.ENGINE_VERSION})",
-                       (lambda: self.open_url(link)) if link else None, secs=15, label="Download")
-            if not silent:
-                messagebox.showinfo("updates", f"A newer version is available.\n\nYou have: version {E.ENGINE_VERSION}\n"
-                                    f"Newest: version {latest}")
+            snooze = E.get_settings(E.db()).get("update_later", "")
+            if silent and snooze == f"{latest}:{time.strftime('%Y%m%d')}":
+                return                                              # said "Later" today - don't nag again until tomorrow
+            self.show_update(m)
         elif not silent:
             messagebox.showinfo("updates", f"You have the newest version.\n\nYou have: version {E.ENGINE_VERSION}\n"
                                 f"Newest: version {latest}")
+
+    # ---- the big "update available" page ----
+    def show_update(self, m):
+        self.hide_update()
+        P = self.P
+        ov = tk.Frame(self, bg=P["bg"], bd=0, highlightthickness=0)
+        ov.place(x=0, y=0, relwidth=1, relheight=1)
+        ov.lift()
+        self._update_ov = ov
+        box = tk.Frame(ov, bg=P["bg"], bd=0, highlightthickness=1, highlightbackground=P["border"], padx=px(40), pady=px(32))
+        box.place(relx=0.5, rely=0.45, anchor="center")
+
+        def lab(text, font, fg=None, **kw):
+            w = tk.Label(box, text=text, font=font, bg=P["bg"], fg=fg or P["fg"], bd=0, anchor="w", justify="left", **kw)
+            w.pack(anchor="w")
+            return w
+        lab("A new version of Deals is ready", self.f_page)
+        lab(f"Version {m['version']}   (you have {E.ENGINE_VERSION})", self.f_big, P["accent"]).pack_configure(pady=(6, 14))
+        if m.get("notes"):
+            lab("What's new", self.f_small_b, P["muted"])
+            for n in m["notes"][:8]:
+                lab("\u2022  " + n, self.f_norm, wraplength=px(520)).pack_configure(pady=(2, 0))
+        self._update_msg = lab("", self.f_small, P["muted"], wraplength=px(520))
+        self._update_msg.pack_configure(pady=(16, 0))
+        bar = tk.Frame(box, bg=P["bg"])
+        bar.pack(anchor="w", pady=(18, 0))
+        self._update_bar = bar
+        frozen = getattr(sys, "frozen", False)
+        if frozen:
+            self._update_msg.configure(text="This copy of Deals is a packaged app and can't update itself - download the new "
+                                            "version from the page below.")
+            self.button(bar, "Open download page", lambda: self.open_url(m.get("page") or ""), pad=(22, 9), style="solid",
+                        font=self.f_bold).pack(side="left")
+        else:
+            self.button(bar, "Update now", lambda: self.run_update(m), pad=(22, 9), style="solid", font=self.f_bold).pack(side="left")
+            self._update_msg.configure(text="Your current files are backed up first, so you can always go back.")
+        self.button(bar, "Later", lambda: self.update_later(m), pad=(20, 9), style="ghost").pack(side="left", padx=(10, 0))
+        if m.get("page"):
+            self.button(bar, "View on GitHub", lambda: self.open_url(m["page"]), pad=(14, 9), style="ghost",
+                        font=self.f_small).pack(side="left", padx=(10, 0))
+
+    def hide_update(self):
+        ov = getattr(self, "_update_ov", None)
+        if ov is not None:
+            try:
+                ov.destroy()
+            except tk.TclError:
+                pass
+        self._update_ov = None
+
+    def update_later(self, m):
+        E.set_setting(E.db(), "update_later", f"{m['version']}:{time.strftime('%Y%m%d')}")
+        self.hide_update()
+        self.set_status(f"update to version {m['version']} postponed - Help > check for updates when you're ready")
+
+    def run_update(self, m):
+        if getattr(self, "_updating", False):
+            return
+        self._updating = True
+        for w in self._update_bar.winfo_children():
+            w.destroy()
+        self._update_msg.configure(text="Downloading the update...  please don't close Deals.", fg=self.P["fg"])
+
+        def prog(i, n):
+            self.q.put(lambda: self._update_msg.configure(text=f"Downloading the update...  file {min(i + 1, n)} of {n}"))
+
+        def work():
+            try:
+                ok, msg = E.download_update(m, progress=prog)
+            except Exception:  # noqa: BLE001
+                log_error(traceback.format_exc())
+                ok, msg = False, "something went wrong - see Help > open error log. Your files were not changed."
+            self.q.put(lambda: self.update_done(m, ok, msg))
+        threading.Thread(target=work, daemon=True).start()
+
+    def update_done(self, m, ok, msg):
+        self._updating = False
+        for w in self._update_bar.winfo_children():
+            w.destroy()
+        if not ok:
+            self._update_msg.configure(text="The update didn't install: " + msg, fg=self.P["alert"])
+            self.button(self._update_bar, "Try again", lambda: self.run_update(m), pad=(20, 9), style="solid").pack(side="left")
+            self.button(self._update_bar, "Close", self.hide_update, pad=(20, 9), style="ghost").pack(side="left", padx=(10, 0))
+            return
+        self._update_msg.configure(text=f"\u2713 Updated to version {m['version']}. " + msg + "\nRestart Deals to start using it.",
+                                   fg=self.P["accent"])
+        self.button(self._update_bar, "Restart now", self.restart_app, pad=(22, 9), style="solid",
+                    font=self.f_bold).pack(side="left")
+        self.button(self._update_bar, "Later", self.hide_update, pad=(20, 9), style="ghost").pack(side="left", padx=(10, 0))
+
+    def restart_app(self):
+        try:
+            subprocess.Popen([sys.executable] + sys.argv, cwd=os.path.dirname(os.path.abspath(sys.argv[0])) or None)
+        except OSError:
+            log_error(traceback.format_exc())
+            return messagebox.showinfo("restart", "Couldn't restart automatically - please close and reopen Deals.")
+        self.after(300, self.on_close)
+
+    def auto_update_check(self):
+        """On start-up (and now and then) quietly look for a new version."""
+        try:
+            st = E.get_settings(E.db())
+            if st.get("update_url") and time.time() - float(st.get("update_checked") or 0) > 6 * 3600:
+                self.check_updates(silent=True)
+        except Exception:  # noqa: BLE001
+            log_error(traceback.format_exc())
 
     def maybe_health(self):
         """About once a week, quietly test every source and say so if some have stopped working."""

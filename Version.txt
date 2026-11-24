@@ -1,2 +1,5 @@
-23
+24
 https://github.com/M000Nz/Deals
+note: Deals can now update itself - press Update now and your old files are backed up first
+note: Fixed JB Hi-Fi showing the crossed-out ticket price instead of the real price
+note: Update pop-up shows what is new and asks before installing

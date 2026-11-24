@@ -18,6 +18,7 @@ import importlib.util
 import subprocess
 import sys
 import threading
+import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed, wait, FIRST_COMPLETED
 from concurrent.futures import TimeoutError as FutTimeout
@@ -31,12 +32,12 @@ from datetime import datetime
 from email.message import EmailMessage
 from email.utils import parsedate_to_datetime
 from pathlib import Path
-from urllib.parse import parse_qs, quote_plus, urlencode, urljoin, urlparse
+from urllib.parse import parse_qs, quote, quote_plus, urlencode, urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup
 
-ENGINE_VERSION = 23
+ENGINE_VERSION = 24
 DB_PATH = Path(__file__).parent / "dealscraper.db"
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
@@ -2239,6 +2240,90 @@ def watch_report_html(con, sym: str = "$") -> str:
             money(sym, reg[0]) if reg else "-", money(sym, min(ps)) if ps else "-", len(ps)))
     out.append("</table>")
     return "".join(out)
+
+
+UPDATE_FILES = ["DealScraper.pyw", "engine.py", "ui_kit.py", "README.md", "selftest.py"]
+UPDATE_REQUIRED = ("DealScraper.pyw", "engine.py", "ui_kit.py")
+UPDATE_FIXTURES = ["gift_card_badge.html", "jsonld_grid.html", "savings_noise.html", "was_price_cards.html", "jb_ticket.html"]
+APP_DIR = Path(__file__).resolve().parent
+
+
+def update_manifest(url: str) -> dict | None:
+    """Read the update file. Line 1 = newest version, line 2 = download page, then optional 'note: ...' lines
+    (what's new) and 'file: path' lines (extra files to download). None if it can't be read."""
+    try:
+        r = requests.get(url, timeout=(5, 8), headers={"User-Agent": "Deals-updater"})
+        r.raise_for_status()
+        lines = [ln.strip() for ln in r.text.strip().splitlines() if ln.strip()]
+        m = {"version": int(lines[0]), "page": "", "notes": [], "files": [], "base": url.rsplit("/", 1)[0] + "/"}
+        for ln in lines[1:]:
+            low = ln.lower()
+            if low.startswith("note:"):
+                m["notes"].append(ln[5:].strip())
+            elif low.startswith("file:"):
+                m["files"].append(ln[5:].strip())
+            elif low.startswith("http") and not m["page"]:
+                m["page"] = ln
+        return m
+    except (requests.RequestException, ValueError, IndexError):
+        return None
+
+
+def download_update(m: dict, app_dir=None, progress=None) -> tuple[bool, str]:
+    """Download the new files, check them, back up the current ones, then swap them in. Nothing is touched unless every
+    required file downloaded and compiles; if swapping fails part-way the old files are put back."""
+    app_dir = Path(app_dir or APP_DIR)
+    rels: list[str] = []
+    for rel in UPDATE_FILES + ["Fixtures/" + f for f in UPDATE_FIXTURES] + list(m.get("files", [])):
+        if rel not in rels:
+            rels.append(rel)
+    got: dict[str, bytes] = {}
+    for i, rel in enumerate(rels):
+        if progress:
+            progress(i, len(rels))
+        try:
+            r = requests.get(m["base"] + quote(rel), timeout=(6, 30), headers={"User-Agent": "Deals-updater"})
+        except requests.RequestException as e:
+            return False, "couldn't reach the download address - check your internet connection and try again"
+        if r.status_code == 404 and rel not in UPDATE_REQUIRED:
+            continue
+        if r.status_code != 200 or len(r.content) < 20:
+            return False, f"couldn't download {rel} (error {r.status_code})"
+        if rel.endswith((".py", ".pyw")):
+            try:
+                compile(r.content.decode("utf-8"), rel, "exec")
+            except (SyntaxError, UnicodeDecodeError, ValueError):
+                return False, f"{rel} arrived damaged, so nothing was changed"
+        got[rel] = r.content
+    if any(f not in got for f in UPDATE_REQUIRED):
+        return False, "some required files were missing, so nothing was changed"
+    if f"ENGINE_VERSION = {m['version']}".encode() not in got["engine.py"]:
+        return False, "the new files don't match the announced version yet - try again in a few minutes"
+    fix_dir = next((d for d in ("fixtures", "Fixtures") if (app_dir / d).is_dir()), "fixtures")
+    dest = {rel: app_dir / (fix_dir + rel[len("Fixtures"):] if rel.startswith("Fixtures/") else rel) for rel in got}
+    bdir = app_dir / "backup" / f"v{ENGINE_VERSION}_{time.strftime('%Y%m%d-%H%M%S')}"
+    try:
+        for rel, path in dest.items():
+            if path.exists():
+                (bdir / rel).parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(path, bdir / rel)
+        for rel, path in dest.items():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_name(path.name + ".new")
+            tmp.write_bytes(got[rel])
+            os.replace(tmp, path)
+    except OSError as e:
+        for rel, path in dest.items():                 # put everything back
+            if (bdir / rel).exists():
+                try:
+                    shutil.copy2(bdir / rel, path)
+                except OSError:
+                    pass
+        return False, f"couldn't write the new files ({e}); your old files were restored"
+    old = sorted((app_dir / "backup").glob("v*"))
+    for d in old[:-3]:                                 # keep the three newest backups
+        shutil.rmtree(d, ignore_errors=True)
+    return True, f"Updated {len(got)} files. Your previous version is saved in the 'backup' folder."
 
 
 def check_update(url: str) -> tuple[int | None, str]:
