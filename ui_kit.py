@@ -948,7 +948,7 @@ class Spinner(tk.Canvas):
         self.k = (self.k + 1) % self.FRAMES
         try:
             self.redraw()
-            self.job = self.after(40, self._tick)
+            self.job = self.after(66, self._tick)
         except tk.TclError:
             self.job = None
 
@@ -1116,7 +1116,7 @@ class ScrollFrame:
             if abs(step) < 1.0:
                 step = 1.0 if diff > 0 else -1.0
             self.canvas.yview_moveto(round(cur + step) / total)
-            self.canvas.after(14, self._tick)
+            self.canvas.after(16, self._tick)
         except tk.TclError:
             self._animating = False
 

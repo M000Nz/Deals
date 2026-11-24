@@ -37,7 +37,7 @@ from urllib.parse import parse_qs, quote, quote_plus, unquote, urlencode, urljoi
 import requests
 from bs4 import BeautifulSoup
 
-ENGINE_VERSION = 37
+ENGINE_VERSION = 38
 GITHUB_REPO = "M000Nz/Deals"
 GITHUB_API = "https://api.github.com"
 FROZEN = bool(getattr(sys, "frozen", False))                  # True when running as the packaged Deals.exe
@@ -704,7 +704,9 @@ class BrowserEngine:
                                                      "--disable-dev-shm-usage", "--disable-gpu", "--disable-extensions",
                                                      "--disable-background-networking", "--mute-audio",
                                                      "--disable-sync", "--no-first-run",
-                                                     "--blink-settings=imagesEnabled=false"]}
+                                                     "--blink-settings=imagesEnabled=false", "--renderer-process-limit=2",
+                                                     "--disable-software-rasterizer",
+                                                     "--disable-features=Translate,MediaRouter,OptimizationHints"]}
                     if channel:
                         kw["channel"] = channel
                     self.browser = await self.pw.chromium.launch(**kw)
@@ -1521,6 +1523,18 @@ def _host_sem(store: dict):
         return _HOST_SEMS.setdefault(host, threading.Semaphore(2))
 
 
+def lower_priority():
+    """Run below normal priority so scans never starve other programs (Windows only; browser children inherit it)."""
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        k = ctypes.windll.kernel32
+        k.SetPriorityClass(k.GetCurrentProcess(), 0x00004000)      # BELOW_NORMAL_PRIORITY_CLASS
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _scan_one(store: dict, keywords: str, cfg: dict | None = None):
     key = (store["search_url"], keywords, (cfg or {}).get("browser", "1"))
     now = time.time()
@@ -1891,7 +1905,7 @@ def drop_junk_prices(offers: list[Offer], ratio: float = JUNK_RATIO) -> tuple[li
     return keep, len(offers) - len(keep)
 
 
-POOL_WORKERS = 12
+POOL_WORKERS = 8
 DEAD_AFTER = 3          # a store that fails this many times in a row is paused for a day (then 2, 4, 7 days)
 FAIL_KINDS = {"blocked", "notfound", "needsjs", "botcheck", "nobrowser", "error"}
 
@@ -3859,7 +3873,7 @@ def correct_query(text: str, aggressive: bool = False) -> tuple[str, list[tuple[
         pure = tok.isalpha()
         if pure and i + 1 < len(inc) and inc[i + 1].isalpha():      # 'play station' -> 'playstation'
             joined = (tok + inc[i + 1]).lower()
-            if joined in vocab and tok.lower() not in vocab and inc[i + 1].lower() not in vocab:
+            if joined in VOCAB_EXTRA or (joined in vocab and tok.lower() not in vocab and inc[i + 1].lower() not in vocab):
                 changes.append((f"{tok} {inc[i + 1]}", joined))
                 out.append(joined)
                 i += 2

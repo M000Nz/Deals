@@ -1,5 +1,4 @@
-37
+38
 https://github.com/M000Nz/Deals
-note: Broader search - if a search finds almost nothing, Deals now automatically tries every other shop too
-note: New sources for watches and wearables: COROS, Suunto, Polar, Amazfit, Wahoo, Strada Sports, Running Warehouse
-note: Watch and wearable brands (Coros, Suunto, Polar, Amazfit...) now search the sports shops as well
+note: Lower CPU use - searches run at lower priority, fewer shops at once, lighter background browser and slower idle animations
+note: Fixed "play station 5" being turned into the wrong word by the spelling fixer
