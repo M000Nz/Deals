@@ -1,5 +1,4 @@
-30
+31
 https://github.com/M000Nz/Deals
-note: New Sources > repair broken sources - finds the real search address for shops showing Search URL not found
-note: Stronger browser disguise and a second attempt for shops that show a bot check
-note: StaticICE search fixed so its 200+ store results come back
+note: New themed drop-down lists with a tick on your current choice and hover tips explaining each option
+note: Labels, buttons and menu items now start with a capital letter

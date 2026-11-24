@@ -124,7 +124,7 @@ def ensure_deps():
 ensure_deps()
 import engine as E  # noqa: E402
 
-if getattr(E, "ENGINE_VERSION", 0) < 30:
+if getattr(E, "ENGINE_VERSION", 0) < 31:
     _r = tk.Tk()
     _r.withdraw()
     messagebox.showerror("Deals", "engine.py is out of date.\n\nReplace it with the new engine.py from the "
@@ -222,19 +222,86 @@ def history_text(sym, hist):
 # --------------------------------------------------------------------------- #
 # Small widgets (all plain tk so they follow the black/white theme everywhere)
 # --------------------------------------------------------------------------- #
-class Pop:
-    """A text button that opens a dropdown list of items [(label, command) | None]."""
+# Hover explanations for drop-down items (matched on the start of the label, case-insensitive).
+TIPS = [
+    # sorting
+    ("best match", "Closest to what you typed, with real deals first."),
+    ("best value", "Balances a low price against how good the deal is."),
+    ("price: low to high", "Cheapest first."),
+    ("price: high to low", "Most expensive first."),
+    ("biggest discount", "Largest percentage off the usual price first."),
+    ("biggest savings", "Largest dollar amount saved first."),
+    ("biggest % off", "Largest percentage off first."),
+    ("biggest drop", "Items whose price has fallen the most since you added them."),
+    ("deal score", "Highest 0-100 score first (discount, price history, shop and reviews combined)."),
+    ("highest deal score", "Highest 0-100 score first (discount, price history, shop and reviews combined)."),
+    ("ending soon", "Limited-time deals that finish first."),
+    ("best reviews", "Highest-rated products first."),
+    ("newest", "Most recently found first."),
+    ("shuffled", "A random order - press Shuffle for a new one."),
+    ("added", "In the order you added them."),
+    ("closest to target", "Items nearest to your target price first."),
+    ("last checked", "Most recently checked first."),
+    ("name", "Alphabetical."),
+    # reviews
+    ("off", "Don't look up reviews."),
+    ("show ratings", "Show a star rating on products when one can be found."),
+    ("hide poor reviews", "Hide products that have clearly bad reviews."),
+    ("only 4 stars and up", "Only show products rated 4 stars or higher."),
+    # watchlist auto-check
+    ("15 min", "Check your Watchlist every 15 minutes while Deals is open."),
+    ("daily", "Check your Watchlist once a day."),
+    # menus
+    ("manage sources", "Switch individual shops on or off and set up browser mode."),
+    ("test all sources", "Try a sample search at every shop and show which ones work."),
+    ("add custom store", "Add a shop that isn't in the list by giving its search address."),
+    ("repair broken sources", "Find the real search address for shops that say 'Search URL not found'."),
+    ("reset built-in list", "Restore the built-in shop list. Your custom shops are kept."),
+    ("alerts", "Choose how you're told about deals: phone, Discord, Telegram, email, summaries and quiet hours."),
+    ("browser mode", "Let Deals read shops that need JavaScript using a hidden browser."),
+    ("hidden sites", "Sites whose results you never want to see."),
+    ("cashback", "Add your cashback rate so effective prices include it."),
+    ("check all sources", "Test every shop with a sample search and list the ones that need attention."),
+    ("weekly source check", "Quietly test all shops once a week and warn you if some stop working."),
+    ("export watchlist report", "Save your Watchlist and its price history as a web page."),
+    ("run at startup", "Start Deals minimised when you log in so alerts keep working."),
+    ("export data", "Save your data as CSV files you can open in Excel."),
+    ("back up database", "Save a copy of your watchlist, history and settings."),
+    ("restore database", "Replace your data with a backup file. Deals restarts afterwards."),
+    ("colour pictures", "Switch product pictures between colour and black-and-white."),
+    ("light / dark", "Switch between the light and dark look."),
+    ("how it works", "A short guide to how Deals finds and ranks deals."),
+    ("fair use and privacy", "What Deals does with the websites it reads and with your data."),
+    ("open error log", "Open the file that records any problems, for troubleshooting."),
+    ("run self-check", "Test that prices are read correctly from saved sample pages."),
+    ("check for updates", "See whether a newer version of Deals is available."),
+    ("about", "Version information."),
+    # card menu
+    ("open page", "Open this product on the shop's website."),
+    ("add to watchlist", "Track this product and get alerted when the price drops."),
+    ("copy deal text", "Copy a short description of this deal to paste elsewhere."),
+    ("add to side-by-side", "Add to a comparison of up to 3 products."),
+    ("remove from comparison", "Take this product out of the comparison."),
+    ("clear comparison", "Empty the comparison list."),
+    ("wrong price", "Tell Deals this listing's price is wrong and hide it."),
+]
 
-    def __init__(self, app, parent, text, items, pad=(12, 4), style="outline"):
-        self.app, self.text = app, text
+
+def tip_for(label):
+    low = (label or "").lower()
+    for key, tip in TIPS:
+        if low == key or (len(key) > 6 and low.startswith(key)):
+            return tip
+    return None
+
+
+class Pop:
+    """A text button that opens a themed dropdown list of items [(label, command) | None]. `current` (optional) is a
+    function returning the chosen value, which gets a tick."""
+
+    def __init__(self, app, parent, text, items, pad=(12, 4), style="outline", current=None):
+        self.app, self.text, self.items, self.current = app, text, items, current
         self.btn = app.button(parent, "", self.open, pad=pad, style=style)
-        self.menu = app.reg(tk.Menu(self.btn, tearoff=0, font=app.f_norm, bd=1, relief="flat",
-                                    activeborderwidth=0), "menu")
-        for it in items:
-            if it is None:
-                self.menu.add_separator()
-            else:
-                self.menu.add_command(label=it[0], command=it[1])
         self.refresh()
 
     def refresh(self):
@@ -244,10 +311,14 @@ class Pop:
             pass                                    # the screen was redrawn and this button no longer exists
 
     def open(self):
-        try:
-            self.menu.tk_popup(self.btn.winfo_rootx(), self.btn.winfo_rooty() + self.btn.winfo_height())
-        finally:
-            self.menu.grab_release()
+        menu = ui.StyledMenu(self.app, tip_for=tip_for)
+        cur = self.current() if self.current else None
+        for it in self.items:
+            if it is None:
+                menu.add_separator()
+            else:
+                menu.add_command(label=it[0], command=it[1], checked=cur is not None and it[0] == cur)
+        menu.tk_popup(self.btn.winfo_rootx(), self.btn.winfo_rooty() + self.btn.winfo_height() + px(4))
 
     def pack(self, **kw):
         self.btn.pack(**kw)
@@ -1074,7 +1145,7 @@ class App(tk.Tk):
         kw.setdefault("anchor", "w")
         if "wraplength" in kw:
             kw["wraplength"] = px(kw["wraplength"])
-        return self.reg(tk.Label(parent, text=text, font=font or self.f_norm, bd=0, padx=0, pady=0, **kw), role)
+        return self.reg(tk.Label(parent, text=ui.cap(text), font=font or self.f_norm, bd=0, padx=0, pady=0, **kw), role)
 
     def button(self, parent, text, cmd, font=None, pad=(12, 4), style="outline"):
         return self.reg(RoundButton(self, parent, text, cmd, font or self.f_norm, pad, style), "btn")
@@ -1092,7 +1163,7 @@ class App(tk.Tk):
             setter(v)
             box["p"].refresh()
 
-        p = Pop(self, parent, lambda: f"{prefix}{get()} \u25be", [(v, lambda v=v: choose(v)) for v in values])
+        p = Pop(self, parent, lambda: f"{prefix}{get()} \u25be", [(v, lambda v=v: choose(v)) for v in values], current=get)
         box["p"] = p
         return p
 
@@ -1439,7 +1510,7 @@ class App(tk.Tk):
             webbrowser.open(url)
 
     def set_status(self, text):
-        self.status_var.set(text)
+        self.status_var.set(ui.cap(text))
 
     def set_sort(self, v):
         self.sort = v
@@ -1551,7 +1622,7 @@ class App(tk.Tk):
 
     def card_menu(self, e, card):
         o = card.o
-        m = tk.Menu(self, tearoff=0)
+        m = ui.StyledMenu(self, tip_for=tip_for)
         m.add_command(label="Open page", command=lambda: self.open_url(o.url))
         if o.others:
             m.add_command(label=f"Compare {len(o.others) + 1} stores...", command=lambda: self.open_compare(o))
@@ -1700,7 +1771,7 @@ class App(tk.Tk):
         threading.Thread(target=work, daemon=True).start()
 
     def review_menu(self, e, card):
-        m = tk.Menu(self, tearoff=0)
+        m = ui.StyledMenu(self, tip_for=tip_for)
         text = E.review_verdict(self.rev_info.get(card.o.url))[1]
         m.add_command(label=text or "Reviews", state="disabled")
         m.add_separator()

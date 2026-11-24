@@ -216,11 +216,179 @@ def draw_pill(cv, x, y, w, h, fill):
 # --------------------------------------------------------------------------- #
 # Widgets
 # --------------------------------------------------------------------------- #
+def cap(t):
+    """Start with a capital letter (leaves iPhone / eBay / URLs alone)."""
+    if isinstance(t, str) and len(t) > 1 and t[0].isalpha() and t[0].islower() and not t[1].isupper() \
+            and not t.startswith(("http", "www", "ntfy.")):
+        return t[0].upper() + t[1:]
+    return t
+
+
+def _round_corners(win):
+    """Windows 11: ask for softly rounded corners on a borderless pop-up."""
+    if sys.platform != "win32":
+        return
+    try:
+        win.update_idletasks()
+        hwnd = ctypes.windll.user32.GetParent(win.winfo_id()) or win.winfo_id()
+        ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, 33, ctypes.byref(ctypes.c_int(2)), 4)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+class StyledMenu:
+    """A themed drop-down list (same calls as tk.Menu: add_command / add_separator / tk_popup / grab_release).
+    Rows have comfortable padding, a hover highlight, a tick on the current choice and an optional hover tip."""
+    _open = None
+
+    def __init__(self, app, parent=None, tip_for=None):
+        self.app, self.items, self.top, self.tip_for = app, [], None, tip_for
+        self.tip_win, self._tip_job = None, None
+
+    def add_command(self, label="", command=None, state="normal", checked=False, tip=None, **kw):
+        self.items.append((label, command, state, checked, tip))
+
+    def add_separator(self):
+        self.items.append(None)
+
+    def grab_release(self):
+        pass
+
+    def close(self, *_):
+        self._hide_tip()
+        if self.top is not None:
+            try:
+                self.top.destroy()
+            except tk.TclError:
+                pass
+        self.top = None
+        if StyledMenu._open is self:
+            StyledMenu._open = None
+
+    def _hide_tip(self):
+        if self._tip_job:
+            try:
+                self.app.after_cancel(self._tip_job)
+            except (tk.TclError, ValueError):
+                pass
+            self._tip_job = None
+        if self.tip_win is not None:
+            try:
+                self.tip_win.destroy()
+            except tk.TclError:
+                pass
+            self.tip_win = None
+
+    def _show_tip(self, row, text):
+        self._hide_tip()
+        P, app = self.app.P, self.app
+        try:
+            tw = tk.Toplevel(app)
+            tw.overrideredirect(True)
+            tw.attributes("-topmost", True)
+            tw.configure(bg=P["border"])
+            inner = tk.Frame(tw, bg=P["bg"])
+            inner.pack(padx=1, pady=1)
+            tk.Label(inner, text=text, font=app.f_small, bg=P["bg"], fg=P["muted"], justify="left",
+                     wraplength=px(260), padx=px(12), pady=px(8)).pack()
+            tw.update_idletasks()
+            x = self.top.winfo_rootx() + self.top.winfo_width() + px(6)
+            if x + tw.winfo_reqwidth() > app.winfo_screenwidth() - 8:          # no room on the right: put it on the left
+                x = max(8, self.top.winfo_rootx() - tw.winfo_reqwidth() - px(6))
+            y = row.winfo_rooty()
+            tw.geometry(f"+{x}+{y}")
+            self.tip_win = tw
+        except tk.TclError:
+            self.tip_win = None
+
+    def tk_popup(self, x, y):
+        app, P = self.app, self.app.P
+        if StyledMenu._open is not None:
+            StyledMenu._open.close()
+        top = tk.Toplevel(app)
+        self.top, StyledMenu._open = top, self
+        top.overrideredirect(True)
+        top.attributes("-topmost", True)
+        top.configure(bg=P["border"])
+        body = tk.Frame(top, bg=P["bg"])
+        body.pack(padx=1, pady=1)
+        fnt = app.f_norm
+        width = max((tkfont.Font(font=fnt).measure(cap(it[0])) for it in self.items if it), default=80) + px(64)
+        for it in self.items:
+            if it is None:
+                tk.Frame(body, bg=P["line"], height=1).pack(fill="x", padx=px(10), pady=px(4))
+                continue
+            label, cmd, state, checked, tip = it
+            tip = tip or (self.tip_for(label) if self.tip_for else None)
+            off = state == "disabled"
+            row = tk.Frame(body, bg=P["bg"], cursor="arrow" if off else "hand2")
+            row.pack(fill="x", padx=px(4), pady=1)
+            mark = tk.Label(row, text="\u2713" if checked else "", font=app.f_small, bg=P["bg"], fg=P["accent"], width=2)
+            mark.pack(side="left", padx=(px(6), 0))
+            txt = tk.Label(row, text=cap(label), font=app.f_bold if checked else fnt, bg=P["bg"],
+                           fg=P["muted"] if off else P["fg"], anchor="w", padx=px(4), pady=px(6), width=max(8, width // px(8)))
+            txt.pack(side="left", fill="x", expand=True, padx=(0, px(10)))
+            parts = (row, mark, txt)
+            if off:
+                continue
+
+            def enter(e, parts=parts, tip=tip, row=row):
+                for w in parts:
+                    w.configure(bg=P["hover"])
+                self._hide_tip()
+                if tip:
+                    self._tip_job = app.after(350, lambda: self._show_tip(row, tip))
+
+            def leave(e, parts=parts):
+                for w in parts:
+                    w.configure(bg=P["bg"])
+                self._hide_tip()
+
+            def click(e, cmd=cmd):
+                self.close()
+                if cmd:
+                    app.after(10, cmd)
+            for w in parts:
+                w.bind("<Enter>", enter)
+                w.bind("<Leave>", leave)
+                w.bind("<Button-1>", click)
+        top.update_idletasks()
+        w, h = top.winfo_reqwidth(), top.winfo_reqheight()
+        sw, sh = app.winfo_screenwidth(), app.winfo_screenheight()
+        x = max(4, min(x, sw - w - 8))
+        if y + h > sh - 40:                                       # not enough room below: open upwards
+            y = max(4, y - h - px(34))
+        top.geometry(f"+{int(x)}+{int(y)}")
+        _round_corners(top)
+        top.bind("<Escape>", self.close)
+        try:
+            top.focus_force()
+            top.grab_set()
+        except tk.TclError:
+            pass
+
+        def outside(e):
+            if e.widget is top or not str(e.widget).startswith(str(top)):
+                inside = top.winfo_rootx() <= e.x_root <= top.winfo_rootx() + top.winfo_width() and \
+                         top.winfo_rooty() <= e.y_root <= top.winfo_rooty() + top.winfo_height()
+                if not inside:
+                    self.close()
+        top.bind("<Button-1>", outside, add="+")
+        top.bind("<FocusOut>", lambda e: app.after(120, self._maybe_close))
+
+    def _maybe_close(self):
+        try:
+            if self.top is not None and not self.top.focus_displayof():
+                self.close()
+        except (tk.TclError, KeyError):
+            self.close()
+
+
 class RoundButton(tk.Canvas):
     """Pill-shaped button. style: outline | solid | ghost."""
 
     def __init__(self, app, parent, text, command, font, pad=(12, 4), style="outline"):
-        self.app, self.label_text, self.command = app, text, command
+        self.app, self.label_text, self.command = app, cap(text), command
         self.font_, self.pad, self.style_, self.hover = font, pad, style, False
         self.badge = False                      # red notification dot in the top-right corner
         self.fobj = tkfont.Font(font=font)
@@ -264,7 +432,7 @@ class RoundButton(tk.Canvas):
 
     def configure(self, cnf=None, **kw):
         if "text" in kw:
-            self.label_text = kw.pop("text")
+            self.label_text = cap(kw.pop("text"))
             self._fit()
         if cnf or kw:
             tk.Canvas.configure(self, cnf, **kw)
