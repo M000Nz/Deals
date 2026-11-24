@@ -36,7 +36,7 @@ from urllib.parse import parse_qs, quote_plus, urlencode, urljoin, urlparse
 import requests
 from bs4 import BeautifulSoup
 
-ENGINE_VERSION = 20
+ENGINE_VERSION = 21
 DB_PATH = Path(__file__).parent / "dealscraper.db"
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
@@ -255,7 +255,7 @@ def select_stores(stores: list[dict], keywords: str, cfg: dict | None = None) ->
 
 DEFAULTS = {"region": "Australia", "interval": "60", "currency": "$", "popups": "1", "theme": "light",
             "auto": "0", "hide_acc": "0", "sort": "Best match", "limited": "0", "browser": "1", "blocked": "ebay", "scope": "smart",
-            "health_auto": "1", "alert_mode": "instant", "quiet_on": "0", "quiet_start": "22", "quiet_end": "7", "summary_hour": "8"}
+            "health_auto": "1", "update_url": "https://raw.githubusercontent.com/M000Nz/Deals/main/Version.txt", "alert_mode": "instant", "quiet_on": "0", "quiet_start": "22", "quiet_end": "7", "summary_hour": "8"}
 ALERT_MIN_SCORE = 50
 SECRET_KEYS = {"discord", "tg_token", "email_pass"}
 

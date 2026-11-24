@@ -21,7 +21,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import tkinter as tk
 from tkinter import font as tkfont
-from tkinter import filedialog, messagebox
+from tkinter import filedialog, messagebox, simpledialog
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -97,7 +97,7 @@ def ensure_deps():
 ensure_deps()
 import engine as E  # noqa: E402
 
-if getattr(E, "ENGINE_VERSION", 0) < 20:
+if getattr(E, "ENGINE_VERSION", 0) < 21:
     _r = tk.Tk()
     _r.withdraw()
     messagebox.showerror("Deals", "engine.py is out of date.\n\nReplace it with the new engine.py from the "
@@ -2955,11 +2955,16 @@ class App(tk.Tk):
         con = E.db()
         url = E.get_settings(con).get("update_url", "")
         if not url and not silent:
-            d = Form(self, "check for updates", [{"key": "url", "label": "update address", "width": 44, "default": ""}],
-                     intro="Deals can check a web address for a newer version. Put a text file online (e.g. a GitHub raw "
-                           "link) whose first line is the newest engine version number and second line is the download page. "
-                           "Leave blank to skip.").result
-            url = (d or {}).get("url", "").strip()
+            try:
+                d = Form(self, "check for updates", [{"key": "url", "label": "update address", "width": 44, "default": ""}],
+                         intro="Deals can check a web address for a newer version. Put a text file online (e.g. a GitHub raw "
+                               "link) whose first line is the newest engine version number and second line is the download page. "
+                               "Leave blank to skip.").result
+                url = (d or {}).get("url", "").strip()
+            except Exception:  # noqa: BLE001
+                log_error(traceback.format_exc())
+                url = (simpledialog.askstring("check for updates", "Update address (a link to a text file with the newest "
+                                              "version number on the first line):", parent=self) or "").strip()
             if not url:
                 return
             E.set_setting(con, "update_url", url)
