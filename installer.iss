@@ -21,6 +21,7 @@ OutputBaseFilename=Deals-Setup
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
+SetupIconFile=assets\deals.ico
 CloseApplications=yes
 RestartApplications=no
 UninstallDisplayName=Deals
@@ -28,13 +29,13 @@ UninstallDisplayIcon={app}\Deals.exe
 ArchitecturesInstallIn64BitMode=x64compatible
 
 [Tasks]
-Name: "desktopicon"; Description: "Create a desktop shortcut"; Flags: unchecked
+Name: "desktopicon"; Description: "Create a desktop shortcut"
 
 [Files]
 Source: "dist\Deals\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{autoprograms}\Deals"; Filename: "{app}\Deals.exe"
+Name: "{autoprograms}\Deals"; Filename: "{app}\Deals.exe"; IconFilename: "{app}\Deals.exe"
 Name: "{autodesktop}\Deals"; Filename: "{app}\Deals.exe"; Tasks: desktopicon
 
 [Run]

@@ -44,11 +44,11 @@ jobs:
 
       - name: Build Deals.exe
         run: >
-          python -m PyInstaller --noconfirm --clean --windowed --name Deals
+          python -m PyInstaller --noconfirm --clean --windowed --icon assets/deals.ico --name Deals
           --collect-all playwright
           --hidden-import lxml.etree --hidden-import keyring.backends.Windows
           --add-data "engine.py;." --add-data "ui_kit.py;." --add-data "selftest.py;."
-          --add-data "Fixtures;Fixtures"
+          --add-data "Fixtures;Fixtures" --add-data "assets;assets"
           DealScraper.pyw
 
       - name: Smoke-test the built app

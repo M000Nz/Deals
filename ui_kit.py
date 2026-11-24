@@ -789,7 +789,7 @@ def style_titlebar(win, dark: bool, bg: str, fg: str, border: str):
 
 
 def make_icon(size: int = 256):
-    """A black rounded square with a white D and a small emerald dot."""
+    """A black rounded square with a white D and an emerald asterisk (D*)."""
     if not HAS_PIL:
         return None
     S, n = 4, size * 4
@@ -797,14 +797,20 @@ def make_icon(size: int = 256):
     d = ImageDraw.Draw(im)
     ink = (10, 10, 10, 255)
     d.rounded_rectangle((0, 0, n - 1, n - 1), radius=int(n * 0.22), fill=ink)
-    x0, y0, x1, y1 = n * 0.30, n * 0.25, n * 0.72, n * 0.75
+    x0, y0, x1, y1 = n * 0.245, n * 0.225, n * 0.705, n * 0.775
     r = (y1 - y0) / 2
     d.rectangle((x0, y0, x1 - r, y1), fill="white")
     d.pieslice((x1 - 2 * r, y0, x1, y1), -90, 90, fill="white")
-    t = n * 0.085
+    t = n * 0.11
     ir = r - t
     d.rectangle((x0 + t, y0 + t, x1 - r, y1 - t), fill=ink)
     d.pieslice((x1 - r - ir, y0 + t, x1 - r + ir, y1 - t), -90, 90, fill=ink)
-    dr = n * 0.075
-    d.ellipse((n * 0.80 - dr, n * 0.22 - dr, n * 0.80 + dr, n * 0.22 + dr), fill=(16, 185, 129, 255))
+    import math
+    ax, ay, ar, aw = n * 0.735, n * 0.28, n * 0.115, n * 0.043
+    green = (16, 185, 129, 255)
+    for k in range(6):                                           # six round-ended spokes = an asterisk
+        a = math.radians(90 + 60 * k)
+        dx, dy = math.cos(a) * ar, math.sin(a) * ar
+        d.line((ax, ay, ax + dx, ay + dy), fill=green, width=int(aw))
+        d.ellipse((ax + dx - aw / 2, ay + dy - aw / 2, ax + dx + aw / 2, ay + dy + aw / 2), fill=green)
     return im.resize((size, size), _resample())
