@@ -18,7 +18,7 @@ import threading
 import time
 import traceback
 import webbrowser
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import tkinter as tk
 from tkinter import font as tkfont
@@ -155,7 +155,7 @@ def ensure_deps():
 ensure_deps()
 import engine as E  # noqa: E402
 
-if getattr(E, "ENGINE_VERSION", 0) < 50:
+if getattr(E, "ENGINE_VERSION", 0) < 51:
     _r = tk.Tk()
     _r.withdraw()
     messagebox.showerror("Deals", "engine.py is out of date.\n\nReplace it with the new engine.py from the "
@@ -506,6 +506,56 @@ class Form(tk.Toplevel):
         self.destroy()
 
 
+class ProgressOverlay:
+    """A small card laid over a window that shows work is under way: title, bar, 'N of M' and the current item."""
+
+    def __init__(self, app, host, title, total, note=""):
+        P = app.P
+        self.app, self.total, self.done, self.alive = app, max(total, 1), 0, True
+        self.ov = tk.Frame(host, bg=P["bg"], bd=0, highlightthickness=0)
+        self.ov.place(x=0, y=0, relwidth=1, relheight=1)
+        self.ov.lift()
+        box = tk.Frame(self.ov, bg=P["bg"], bd=0, highlightthickness=1, highlightbackground=P["border"],
+                       padx=px(36), pady=px(28))
+        box.place(relx=0.5, rely=0.45, anchor="center")
+        self.title = tk.Label(box, text=title, font=app.f_page, bg=P["bg"], fg=P["fg"], bd=0, anchor="w")
+        self.title.pack(anchor="w")
+        if note:
+            tk.Label(box, text=note, font=app.f_small, bg=P["bg"], fg=P["muted"], bd=0, anchor="w", justify="left",
+                     wraplength=px(380)).pack(anchor="w", pady=(6, 0))
+        self.w, self.h = px(380), px(8)
+        self.bar = tk.Canvas(box, width=self.w, height=self.h, bg=P["line"], bd=0, highlightthickness=0)
+        self.bar.pack(anchor="w", pady=(18, 10))
+        self.fill = self.bar.create_rectangle(0, 0, 0, self.h, fill=P["accent"], width=0)
+        self.count = tk.Label(box, text="Starting...", font=app.f_bold, bg=P["bg"], fg=P["fg"], bd=0, anchor="w")
+        self.count.pack(anchor="w")
+        self.item = tk.Label(box, text="", font=app.f_small, bg=P["bg"], fg=P["muted"], bd=0, anchor="w", width=48)
+        self.item.pack(anchor="w", pady=(2, 0))
+        self.fails = tk.Label(box, text="", font=app.f_small, bg=P["bg"], fg=P["muted"], bd=0, anchor="w")
+        self.fails.pack(anchor="w")
+        app.button(box, "Hide", self.close, pad=(18, 7), style="ghost").pack(anchor="w", pady=(16, 0))
+
+    def update(self, done, item="", bad=None):
+        if not self.alive:
+            return
+        try:
+            self.done = done
+            self.bar.coords(self.fill, 0, 0, self.w * min(done / self.total, 1.0), self.h)
+            self.count.configure(text=f"{done} of {self.total}   ({100 * done // self.total}%)")
+            self.item.configure(text=ui.cap(item)[:60])
+            if bad is not None:
+                self.fails.configure(text=f"{bad} not working so far")
+        except tk.TclError:
+            self.alive = False
+
+    def close(self):
+        self.alive = False
+        try:
+            self.ov.destroy()
+        except tk.TclError:
+            pass
+
+
 class StoresDialog(tk.Toplevel):
     def __init__(self, app):
         super().__init__(app)
@@ -532,7 +582,7 @@ class StoresDialog(tk.Toplevel):
         app.frame(self, "line", height=1).pack(fill="x")
         bar = app.frame(self)
         bar.pack(fill="x", padx=10, pady=6)
-        app.button(bar, "Test all", lambda: app.test_stores(self.refresh)).pack(side="left", padx=(0, 6))
+        app.button(bar, "Test all", lambda: app.test_stores(self.refresh, host=self)).pack(side="left", padx=(0, 6))
         app.button(bar, "add custom...", lambda: app.add_store(self.refresh)).pack(side="left", padx=(0, 6))
         app.button(bar, "reset list", lambda: (app.reset_stores(), self.refresh())).pack(side="left")
         app.button(bar, "close", self.destroy).pack(side="right")
@@ -1088,6 +1138,7 @@ class App(tk.Tk):
 
         self.q = queue.Queue()
         self.tray, self._tray_told, self.tray_close = None, False, False
+        self._testing_all, self._test_prog = False, None
         self._err_count = 0
         self.reg_list, self.scrollers = [], {}
         s = E.get_settings(E.db())
@@ -2782,7 +2833,7 @@ class App(tk.Tk):
                         im.draft("RGB", (self.iw * 2, self.ih * 2))
                     except Exception:  # noqa: BLE001
                         pass
-                    if min(im.size) < 50:                   # a tracking pixel or icon, not a product photo
+                    if min(im.size) < 51:                   # a tracking pixel or icon, not a product photo
                         why.append("too small (placeholder?)")
                         continue
                     return self._prepare(im)
@@ -3365,23 +3416,49 @@ class App(tk.Tk):
         self.button(bar, "open", lambda: (self.open_url(a["url"]), w.destroy())).pack(side="left")
 
     # ----------------------------------------------------------------- stores --
-    def test_stores(self, done=None):
+    def test_stores(self, done=None, host=None):
+        if getattr(self, "_testing_all", False):
+            return self.set_status("already testing - one moment")
         con = E.db()
         cfg = E.get_settings(con)
         cfg["region"] = cfg.get("region") or self.region
         stores = [dict(r) for r in con.execute("SELECT * FROM stores WHERE region=? OR custom=1", (cfg["region"],))]
         self.set_status(f"testing {len(stores)} sources...")
+        self._testing_all = True
+        host = host if host is not None and host.winfo_exists() else self
+        prog = ProgressOverlay(self, host, "Testing sources", len(stores),
+                               "A sample search at every shop. Shops that return nothing are marked in Sources.")
+        self._test_prog = prog
 
         def work():
-            with ThreadPoolExecutor(max_workers=6) as ex:
-                results = list(ex.map(lambda s: (s, *E.test_store(s, cfg=cfg)), stores))
-            c, now = E.db(), time.time()
-            E.reset_health(c)                            # a full test gives every store a fresh chance
-            for s, status, ok in results:
-                c.execute("UPDATE stores SET status=?, tested_at=? WHERE id=?", (status, now, s["id"]))
-                E.record_health(c, s["id"], ok)
-            c.commit()
-            self.q.put(lambda: self.tests_done(results, done))
+            results, bad = [], 0
+            try:
+                with ThreadPoolExecutor(max_workers=6) as ex:
+                    futs = {ex.submit(lambda s=s: (s, *E.test_store(s, cfg=cfg))): s for s in stores}
+                    for fut in as_completed(futs):
+                        try:
+                            r = fut.result()
+                        except Exception:  # noqa: BLE001
+                            s = futs[fut]
+                            r = (s, "Error: test failed", False)
+                        results.append(r)
+                        bad += 0 if r[2] else 1
+                        self.q.put(lambda n=len(results), nm=r[0]["name"], b=bad: (
+                            prog.update(n, nm, b), self.set_status(f"testing sources... {n} of {len(stores)}")))
+                c, now = E.db(), time.time()
+                E.reset_health(c)                            # a full test gives every store a fresh chance
+                for s, status, ok in results:
+                    c.execute("UPDATE stores SET status=?, tested_at=? WHERE id=?", (status, now, s["id"]))
+                    E.record_health(c, s["id"], ok)
+                c.commit()
+            except Exception:  # noqa: BLE001
+                log_error(traceback.format_exc())
+
+            def finish():
+                self._testing_all = False
+                prog.close()
+                self.tests_done(results, done)
+            self.q.put(finish)
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -3768,15 +3845,22 @@ class App(tk.Tk):
         cfg["region"] = cfg.get("region") or self.region
         stores = E.active_stores(con, cfg["region"])
         self.set_status(f"testing {len(stores)} sources...")
+        prog = None if silent else ProgressOverlay(self, self, "Checking sources", len(stores),
+                                                   "A sample search at every shop that is switched on.")
 
         def work():
             try:
                 res = E.health_check(stores, cfg, progress=lambda d, t: self.q.put(
-                    lambda d=d, t=t: self.set_status(f"testing sources... {d} of {t}")))
+                    lambda d=d, t=t: (prog.update(d) if prog else None, self.set_status(f"testing sources... {d} of {t}"))))
             except Exception:  # noqa: BLE001
                 log_error(traceback.format_exc())
                 res = []
-            self.q.put(lambda: self.health_done(res))
+
+            def finish():
+                if prog:
+                    prog.close()
+                self.health_done(res)
+            self.q.put(finish)
         threading.Thread(target=work, daemon=True).start()
 
     def health_done(self, res):
@@ -3819,15 +3903,21 @@ class App(tk.Tk):
         self._repairing = True
         cfg = E.get_settings(con)
         self.set_status("repairing sources...")
+        prog = ProgressOverlay(self, self, "Repairing sources", n,
+                               "Looking for each shop's real search address. This can take a few minutes.")
 
         def work():
             try:
                 res = E.repair_sources(E.db(), cfg, progress=lambda d, t: self.q.put(
-                    lambda d=d, t=t: self.set_status(f"repairing sources... {d} of {t}")))
+                    lambda d=d, t=t: (setattr(prog, "total", max(t, 1)), prog.update(d, "", None), self.set_status(f"repairing sources... {d} of {t}"))))
             except Exception:  # noqa: BLE001
                 log_error(traceback.format_exc())
                 res = []
-            self.q.put(lambda: self.repair_done(res))
+
+            def finish():
+                prog.close()
+                self.repair_done(res)
+            self.q.put(finish)
         threading.Thread(target=work, daemon=True).start()
 
     def repair_done(self, res):

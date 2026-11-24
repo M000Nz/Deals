@@ -1,4 +1,4 @@
-50
+51
 https://github.com/M000Nz/Deals
-note: Shared shop list - new shops and fixed search addresses now arrive from GitHub every time Deals opens, with no app update
-note: Sources menu has a new "update shop list" item to fetch it on demand
+note: Testing sources, checking sources and repairing sources now show a progress card with a bar, an "N of M" count and the shop being tested
+note: Shared shop list from GitHub (stores.json) - new shops and fixed addresses without an app update
