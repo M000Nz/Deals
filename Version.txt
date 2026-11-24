@@ -1,4 +1,4 @@
-40
+41
 https://github.com/M000Nz/Deals
-note: Watchlist - collapse or expand each item with its arrow, or all at once with Collapse all / Expand all (remembered)
-note: Watchlist graphs now line up in the same place on every item
+note: Daily deals / For you keep searching in the background when you switch tabs
+note: Starting a new search now takes over a running Daily deals scan instead of asking you to wait

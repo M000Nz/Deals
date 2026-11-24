@@ -154,7 +154,7 @@ def ensure_deps():
 ensure_deps()
 import engine as E  # noqa: E402
 
-if getattr(E, "ENGINE_VERSION", 0) < 40:
+if getattr(E, "ENGINE_VERSION", 0) < 41:
     _r = tk.Tk()
     _r.withdraw()
     messagebox.showerror("Deals", "engine.py is out of date.\n\nReplace it with the new engine.py from the "
@@ -2071,8 +2071,7 @@ class App(tk.Tk):
             return
         if self.searching:
             return
-        if self.picking:
-            return self.set_status("still finding deals - try again in a moment")
+        self.stop_picks()
         if self.view != "results":
             self.show_results_view()
         self.remember_search(q)
@@ -2121,8 +2120,7 @@ class App(tk.Tk):
         """Pasted product link: read it, then search every other store for the same product."""
         if self.searching:
             return
-        if self.picking:
-            return self.set_status("still finding deals - try again in a moment")
+        self.stop_picks()
         if self.view != "results":
             self.show_results_view()
         con = E.db()
@@ -2450,6 +2448,16 @@ class App(tk.Tk):
         elif mode == "Price: low to high":
             offers.sort(key=lambda o: o.price)
 
+    def stop_picks(self):
+        """A new search takes priority over a Daily deals / For you scan that is still running in the background."""
+        if self.picking:
+            try:
+                self.pick_cancel.set()
+            except AttributeError:
+                pass
+            self.picking = None
+            self.hide_loading()
+
     def pick_title(self, kind):
         return ("Finding today's biggest discounts..." if kind == "daily" else "Looking for deals you might like...")
 
@@ -2464,24 +2472,27 @@ class App(tk.Tk):
         if not stores:
             return messagebox.showinfo("Deals", "No sources are switched on. Open Sources > manage sources.")
         self.picking = kind
+        self.pick_cancel = cancel = threading.Event()
         sf = self.daily if kind == "daily" else self.foryou
         sf.outer.pack_forget()
         self.show_loading(len(stores), self.pick_title(kind))
         self.set_status("looking for deals...")
 
         def prog(d, t):
-            self.q.put(lambda: self.on_pick_progress(d, t))
+            if not cancel.is_set():
+                self.q.put(lambda: self.on_pick_progress(d, t))
 
         def work():
             msg = ""
             try:
                 if kind == "daily":
-                    E.refresh_daily(stores, cfg, progress=prog)
+                    E.refresh_daily(stores, cfg, progress=prog, cancel=cancel)
                 else:
-                    _, msg = E.refresh_foryou(stores, cfg, progress=prog)
+                    _, msg = E.refresh_foryou(stores, cfg, progress=prog, cancel=cancel)
             except Exception:  # noqa: BLE001
                 log_error(traceback.format_exc())
-            self.q.put(lambda: self.picks_done(kind, msg))
+            if not cancel.is_set():           # a new search took over: nothing left to finish here
+                self.q.put(lambda: self.picks_done(kind, msg))
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -2627,7 +2638,7 @@ class App(tk.Tk):
                         im.draft("RGB", (self.iw * 2, self.ih * 2))
                     except Exception:  # noqa: BLE001
                         pass
-                    if min(im.size) < 40:                   # a tracking pixel or icon, not a product photo
+                    if min(im.size) < 41:                   # a tracking pixel or icon, not a product photo
                         why.append("too small (placeholder?)")
                         continue
                     return self._prepare(im)

@@ -37,7 +37,7 @@ from urllib.parse import parse_qs, quote, quote_plus, unquote, urlencode, urljoi
 import requests
 from bs4 import BeautifulSoup
 
-ENGINE_VERSION = 40
+ENGINE_VERSION = 41
 GITHUB_REPO = "M000Nz/Deals"
 GITHUB_API = "https://api.github.com"
 FROZEN = bool(getattr(sys, "frozen", False))                  # True when running as the packaged Deals.exe
@@ -2119,6 +2119,11 @@ def verify_store_prices(offers: list, limit: int = 24, budget: float = 9.0, cfg:
     return fixed
 
 
+def _cancelled(cfg) -> bool:
+    ev = (cfg or {}).get("_cancel")
+    return bool(ev is not None and ev.is_set())
+
+
 def _find_pass(queries: list[tuple], stores: list[dict], cfg: dict | None = None, progress=None,
                deadline: float = 45.0, skip_dead: bool = True) -> dict:
     """Scan every (search, store) pair at once on one shared pool. queries = [(key, keywords)].
@@ -2137,7 +2142,7 @@ def _find_pass(queries: list[tuple], stores: list[dict], cfg: dict | None = None
     try:
         while pending:
             left = t0 + cut - time.time()
-            if left <= 0:
+            if left <= 0 or _cancelled(cfg):
                 break
             finished, pending = wait(pending, timeout=min(left, 0.4), return_when=FIRST_COMPLETED)
             for fut in finished:
@@ -2207,6 +2212,8 @@ def find_offers_many(queries: list[tuple], stores: list[dict], cfg: dict | None 
     """One scan on the shops that fit the product. A search that finds almost nothing is automatically
     widened to the remaining shops (only for that search), so unusual products are still found."""
     out = _find_pass(queries, stores, cfg, progress, deadline, skip_dead)
+    if _cancelled(cfg):
+        return out
     if (cfg or {}).get("scope", "smart") == "all" or (cfg or {}).get("widen", "1") == "0":
         return out
     thin = [(k, kw) for k, kw in queries
@@ -3128,12 +3135,14 @@ def picks_age(con, kind: str) -> float | None:
     return (time.time() - r["m"]) if r and r["m"] else None
 
 
-def refresh_daily(stores: list[dict], cfg: dict | None = None, progress=None, log=print) -> int:
+def refresh_daily(stores: list[dict], cfg: dict | None = None, progress=None, log=print, cancel=None) -> int:
     """Big-ticket items that are a long way below their normal price today. Returns how many were found."""
     con = db()
-    cfg = dict(cfg or {})
+    cfg = dict(cfg or {}, _cancel=cancel)
     queries = [(q, q) for q in random.sample(DAILY_QUERIES, min(DAILY_SWEEP, len(DAILY_QUERIES)))]
     res = find_offers_many(queries, stores, cfg, progress=progress, deadline=150.0)
+    if _cancelled(cfg):
+        return 0
     found: dict[str, tuple[Offer, float]] = {}
     for q, (ranked, _rep) in res.items():
         prev = last_prices(con, [o.url for o in ranked])
@@ -3272,7 +3281,7 @@ def interest_queries(con) -> list[str]:
     return out
 
 
-def refresh_foryou(stores: list[dict], cfg: dict | None = None, progress=None, log=print) -> tuple[int, str]:
+def refresh_foryou(stores: list[dict], cfg: dict | None = None, progress=None, log=print, cancel=None) -> tuple[int, str]:
     """Look for deals similar to what you follow. Adds a few new suggestions each time."""
     con = db()
     cfg = dict(cfg or {})
@@ -3282,7 +3291,10 @@ def refresh_foryou(stores: list[dict], cfg: dict | None = None, progress=None, l
     off = int(get_settings(con).get("foryou_rot") or 0)
     take = [qs[(off + i) % len(qs)] for i in range(min(6, len(qs)))]
     set_setting(con, "foryou_rot", str(off + len(take)))
+    cfg = dict(cfg or {}, _cancel=cancel)
     res = find_offers_many([(q, q) for q in take], stores, cfg, progress=progress, deadline=90.0)
+    if _cancelled(cfg):
+        return 0, ""
     taste = _taste(con)
     seen_fb = {r["url"] for r in con.execute("SELECT url FROM feedback")}
     have = {r["url"] for r in con.execute("SELECT url FROM picks WHERE kind='foryou'")}
