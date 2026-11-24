@@ -55,6 +55,7 @@ Your watchlist, price history and settings live in `%APPDATA%\Deals`, so updatin
 | **Exact matches** | Model numbers are respected - *galaxy watch 6* never shows a Watch 5. Name a brand and only that brand appears. |
 | **Spelling forgiven** | *samsnug galxy* and *play station 5* are corrected automatically. |
 | **Honest prices** | Inflated "was" prices are flagged, junk listings (stickers, cables, parts priced 90%+ below normal) are dropped, and sale-season reminders tell you when to trust the price history. |
+| **Shared shop list** | New shops and fixed search addresses arrive from this repo each time Deals opens - no app update needed. |
 | **Private and light** | Everything stays on your computer. Runs at low priority so it never slows your other programs. |
 
 ---
@@ -165,13 +166,25 @@ python selftest.py            # checks the price reader against saved example pa
 
 1. Raise `ENGINE_VERSION` in `engine.py`, and the matching check in `DealScraper.pyw`.
 2. Put the version on the first line of `Version.txt`, the repository URL on the second, then one `note:` line per change.
-3. Commit and push, then run the **release** workflow (Actions → *Run workflow*) with the tag, e.g. `v49`.
+3. Commit and push, then run the **release** workflow (Actions → *Run workflow*) with the tag, e.g. `v50`.
 
 The workflow builds the app with PyInstaller, runs `--selftest` on the built exe, builds the installer with Inno Setup and publishes `Deals-Setup.exe` with its `.sha256` to the release. `build_exe.bat` is only for local test builds.
 
-### Adding a shop
+### Adding or fixing a shop (no release needed)
 
-Add `("Name", "https://shop.example/search?q={query}")` to `CATALOG` in `engine.py` and the kinds of product it sells to `STORE_CATS`. The shop is then searched only for matching products. Failing shops are paused automatically; **Sources → Repair** looks for a working search address.
+Shops live in **`stores.json`** at the root of this repo. Every copy of Deals downloads it each time it opens and
+merges it into its Sources, so a fix reaches everyone at their next launch - no new installer.
+
+```json
+{"name": "Example Shop", "url": "https://example.com.au/search?q={query}", "cats": ["tech", "gaming"],
+ "browser": false, "enabled": true, "note": "shown in Sources"}
+```
+
+- Add or edit a line, then **raise `version`** at the top (the app ignores a list that isn't newer).
+- `enabled: false` pauses a shop for everyone (users can switch it back on). `browser: true` marks shops that need the hidden browser.
+- Only `https` addresses containing `{query}` are accepted; malformed entries are skipped, and a broken file is ignored.
+- It overrides the built-in list in `engine.py`, which is the fallback for offline and first launch.
+- Shops that need new parsing code still need a normal release.
 
 ### Tuning
 

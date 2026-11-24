@@ -1,4 +1,4 @@
-49
+50
 https://github.com/M000Nz/Deals
-note: Steadier updates - download progress no longer floods the app, and the update page cannot be disturbed while it downloads
-note: Tray icon (under the hidden icons arrow) with Open, Check now, Quit and Force quit, plus a close-to-tray setting
+note: Shared shop list - new shops and fixed search addresses now arrive from GitHub every time Deals opens, with no app update
+note: Sources menu has a new "update shop list" item to fetch it on demand

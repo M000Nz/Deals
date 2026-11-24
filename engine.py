@@ -37,7 +37,7 @@ from urllib.parse import parse_qs, quote, quote_plus, unquote, urlencode, urljoi
 import requests
 from bs4 import BeautifulSoup
 
-ENGINE_VERSION = 49
+ENGINE_VERSION = 50
 GITHUB_REPO = "M000Nz/Deals"
 GITHUB_API = "https://api.github.com"
 FROZEN = bool(getattr(sys, "frozen", False))                  # True when running as the packaged Deals.exe
@@ -507,19 +507,143 @@ def _finish_db(con):
 _SEEDED = False
 
 
+REMOTE_CATALOG_URL = "https://raw.githubusercontent.com/M000Nz/Deals/main/stores.json"
+_CAT_WORD = re.compile(r"^[a-z]{2,12}$")
+_REMOTE_CACHE: dict = {}
+
+
+def remote_cache_path() -> Path:
+    return DB_PATH.parent / "stores_remote.json"
+
+
+def validate_remote_catalog(data) -> dict | None:
+    """Check a downloaded shop list. Bad entries are skipped; a file that is not a shop list at all gives None.
+    It is data only: names, https search addresses with {query}, product kinds and a few flags."""
+    from urllib.parse import urlparse
+    if not isinstance(data, dict):
+        return None
+    try:
+        ver = int(data.get("version"))
+    except (TypeError, ValueError):
+        return None
+    raw = data.get("stores")
+    if not isinstance(raw, list) or len(raw) > 600:
+        return None
+    out, seen = [], set()
+    for e in raw:
+        if not isinstance(e, dict):
+            continue
+        name, url = str(e.get("name", "")).strip(), str(e.get("url", "")).strip()
+        if not 1 <= len(name) <= 60 or any(ord(c) < 32 for c in name) or name in seen:
+            continue
+        if not url.startswith("https://") or "{query}" not in url or len(url) > 300 or re.search(r"\s", url):
+            continue
+        host = (urlparse(url.replace("{query}", "x")).hostname or "").lower()
+        if "." not in host or host == "localhost" or re.fullmatch(r"[\d.:]+", host):
+            continue
+        cats = e.get("cats")
+        if isinstance(cats, str):
+            cats = cats.split()
+        cats = [c for c in cats if isinstance(c, str) and _CAT_WORD.match(c)] if isinstance(cats, list) else []
+        seen.add(name)
+        out.append({"name": name, "url": url, "cats": " ".join(cats) or "all", "browser": e.get("browser") is True,
+                    "enabled": e.get("enabled") is not False, "note": str(e.get("note", ""))[:140]})
+    return {"version": ver, "stores": out}
+
+
+def load_remote_catalog() -> dict | None:
+    """The last shared shop list that was downloaded (kept on this PC so it works offline)."""
+    p = remote_cache_path()
+    try:
+        mt = p.stat().st_mtime
+    except OSError:
+        return None
+    if _REMOTE_CACHE.get("key") == (str(p), mt):
+        return _REMOTE_CACHE.get("data")
+    try:
+        data = validate_remote_catalog(json.loads(p.read_text(encoding="utf-8")))
+    except (OSError, ValueError):
+        data = None
+    _REMOTE_CACHE.update(key=(str(p), mt), data=data)
+    return data
+
+
+def sync_remote_catalog(settings: dict | None = None, force: bool = False) -> tuple[bool, str]:
+    """Download the shared shop list from GitHub and apply it. Returns (changed, message)."""
+    url = (settings or {}).get("catalog_url") or REMOTE_CATALOG_URL
+    try:
+        r = requests.get(url, timeout=(5, 10), headers={"User-Agent": "Deals-updater"})
+        r.raise_for_status()
+        if len(r.content) > 600_000:
+            return False, "the shared shop list was too large, so it was ignored"
+        data = validate_remote_catalog(r.json())
+    except (requests.RequestException, ValueError):
+        return False, "couldn't reach the shared shop list"
+    if not data or not data["stores"]:
+        return False, "the shared shop list wasn't valid, so it was ignored"
+    old = load_remote_catalog()
+    if old and data["version"] <= old["version"] and not force:
+        return False, "the shop list is already up to date"
+    before = {e["name"]: (e["url"], e["enabled"], e["cats"], e["browser"]) for e in (old or {}).get("stores", [])}
+    changes = sum(1 for e in data["stores"] if before.get(e["name"]) != (e["url"], e["enabled"], e["cats"], e["browser"]))
+    p = remote_cache_path()
+    try:
+        tmp = p.with_suffix(".tmp")
+        tmp.write_text(json.dumps(data), encoding="utf-8")
+        os.replace(tmp, p)
+    except OSError:
+        return False, "couldn't save the shared shop list"
+    _REMOTE_CACHE.clear()
+    global _SEEDED
+    _SEEDED = False
+    db().close()                                           # opening the database applies the new list
+    if not changes:
+        return False, "the shop list is already up to date"
+    return True, f"shop list updated to version {data['version']} ({changes} change{'' if changes == 1 else 's'})"
+
+
 def seed_catalog(con):
-    """Add any new built-in stores and refresh built-in search URLs (keeps your on/off choices)."""
-    names = [n for lst in CATALOG.values() for n, _ in lst]
-    con.execute("DELETE FROM stores WHERE custom=0 AND (region NOT IN (%s) OR name NOT IN (%s))"
-                % (",".join("?" * len(CATALOG)), ",".join("?" * len(names))), (*CATALOG, *names))
+    """Add any new built-in stores and refresh built-in search URLs (keeps your on/off choices). The shared shop list
+    downloaded from GitHub (if any) adds shops and overrides built-in addresses, categories and browser settings."""
+    remote = load_remote_catalog()
+    entries: dict[tuple[str, str], tuple[str, str]] = {}
     for region, stores in CATALOG.items():
         for name, url in stores:
-            con.execute("INSERT OR IGNORE INTO stores(name,region,search_url,custom) VALUES(?,?,?,0)",
-                        (name, region, url))
-            con.execute("UPDATE stores SET alt_url='' WHERE name=? AND region=? AND custom=0 AND search_url<>?",
-                        (name, region, url))
-            con.execute("UPDATE stores SET search_url=?, cats=? WHERE name=? AND region=? AND custom=0",
-                        (url, STORE_CATS.get(name, "all"), name, region))
+            entries[(region, name)] = (url, STORE_CATS.get(name, "all"))
+    flags: list[dict] = []
+    if remote:
+        for e in remote["stores"]:
+            entries[("Australia", e["name"])] = (e["url"], e["cats"])
+            flags.append(e)
+    names = sorted({n for _, n in entries})
+    con.execute("DELETE FROM stores WHERE custom=0 AND (region NOT IN (%s) OR name NOT IN (%s))"
+                % (",".join("?" * len(CATALOG)), ",".join("?" * len(names))), (*CATALOG, *names))
+    for (region, name), (url, cats) in entries.items():
+        con.execute("INSERT OR IGNORE INTO stores(name,region,search_url,custom) VALUES(?,?,?,0)", (name, region, url))
+        con.execute("UPDATE stores SET alt_url='' WHERE name=? AND region=? AND custom=0 AND search_url<>?",
+                    (name, region, url))
+        con.execute("UPDATE stores SET search_url=?, cats=? WHERE name=? AND region=? AND custom=0",
+                    (url, cats, name, region))
+    if flags:
+        row = con.execute("SELECT value FROM settings WHERE key='remote_off'").fetchone()
+        try:
+            off = json.loads(row["value"]) if row else {}
+        except ValueError:
+            off = {}
+        was = dict(off)
+        for e in flags:
+            if e["browser"]:
+                con.execute("UPDATE stores SET use_browser=1 WHERE name=? AND custom=0", (e["name"],))
+            if not e["enabled"]:
+                if off.get(e["name"]) != remote["version"]:       # switch off once per list version, so you can switch it back on
+                    note = ("Paused by the shared shop list" + (f": {e['note']}" if e["note"] else ""))[:160]
+                    con.execute("UPDATE stores SET enabled=0, status=? WHERE name=? AND custom=0", (note, e["name"]))
+                    off[e["name"]] = remote["version"]
+            elif e["name"] in off:                                 # the list has switched it back on
+                con.execute("UPDATE stores SET enabled=1, status='Not tested' WHERE name=? AND custom=0", (e["name"],))
+                del off[e["name"]]
+        if off != was:
+            con.execute("INSERT OR REPLACE INTO settings VALUES('remote_off',?)", (json.dumps(off),))
     con.execute("INSERT OR REPLACE INTO settings VALUES('region','Australia')")   # Australia only
     con.commit()
 

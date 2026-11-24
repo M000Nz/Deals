@@ -155,7 +155,7 @@ def ensure_deps():
 ensure_deps()
 import engine as E  # noqa: E402
 
-if getattr(E, "ENGINE_VERSION", 0) < 49:
+if getattr(E, "ENGINE_VERSION", 0) < 50:
     _r = tk.Tk()
     _r.withdraw()
     messagebox.showerror("Deals", "engine.py is out of date.\n\nReplace it with the new engine.py from the "
@@ -215,7 +215,8 @@ HOW = ("SEARCH\n"
        "SOURCES\n"
        "Sources > manage sources lists every shop with a status and the reason when one fails. Test one shop "
        "or all of them. Shops that keep failing are paused automatically so searches stay quick, and Repair "
-       "tries to find a working search address.\n\n"
+       "tries to find a working search address. The shop list also refreshes itself from GitHub each time "
+       "Deals opens, so new shops and fixed addresses arrive without an app update.\n\n"
        "GOOD TO KNOW\n"
        "Reviews (filter bar) add star ratings and what Reddit says. Prices are read automatically and can be "
        "wrong, so check the shop before you buy. Everything stays on your computer. Deals checks for updates "
@@ -293,6 +294,7 @@ TIPS = [
     ("manage sources", "Switch individual shops on or off and set up browser mode."),
     ("test all sources", "Try a sample search at every shop and show which ones work."),
     ("add custom store", "Add a shop that isn't in the list by giving its search address."),
+    ("update shop list", "Download the latest shared shop list from GitHub: new shops and fixed search addresses, no app update needed. This also happens automatically each time Deals opens."),
     ("repair broken sources", "Find the real search address for shops that say 'Search URL not found'."),
     ("reset built-in list", "Restore the built-in shop list. Your custom shops are kept."),
     ("alerts", "Choose how you're told about deals: phone, Discord, Telegram, email, summaries and quiet hours."),
@@ -1154,6 +1156,7 @@ class App(tk.Tk):
         self.after(300, self.start_tray)
         self.after(1000, self.tick)
         self.after(5000, self.auto_update_check)
+        self.after(2500, lambda: self.sync_shop_list(silent=True))
         self.after(60, self.style_window)
         self.set_icon()
         self.protocol("WM_DELETE_WINDOW", self.on_close)
@@ -1344,7 +1347,8 @@ class App(tk.Tk):
         self.theme_sw.pack(side="right", padx=(8, 14))
         menus = [
             ("Sources", [("manage sources...", lambda: StoresDialog(self)), ("test all sources", lambda: self.test_stores()),
-                         ("add custom store...", lambda: self.add_store()), ("repair broken sources", self.run_repair), None,
+                         ("add custom store...", lambda: self.add_store()), ("repair broken sources", self.run_repair),
+                         ("update shop list", self.sync_shop_list), None,
                          ("reset built-in list", self.reset_stores)]),
             ("Settings", [("alerts...", self.open_alerts), ("browser mode...", lambda: StoresDialog(self)),
                           ("hidden sites...", self.open_hidden), ("cashback %...", self.open_cashback),
@@ -2778,7 +2782,7 @@ class App(tk.Tk):
                         im.draft("RGB", (self.iw * 2, self.ih * 2))
                     except Exception:  # noqa: BLE001
                         pass
-                    if min(im.size) < 49:                   # a tracking pixel or icon, not a product photo
+                    if min(im.size) < 50:                   # a tracking pixel or icon, not a product photo
                         why.append("too small (placeholder?)")
                         continue
                     return self._prepare(im)
@@ -3690,6 +3694,40 @@ class App(tk.Tk):
             log_error(traceback.format_exc())
             return messagebox.showinfo("restart", "Couldn't restart automatically - please close and reopen Deals.")
         self.after(300, self.on_close)
+
+    def sync_shop_list(self, silent=False):
+        """Fetch the shared shop list from GitHub (new shops and fixed search addresses) without a new release."""
+        if getattr(self, "_syncing", False):
+            return
+        self._syncing = True
+        if not silent:
+            self.set_status("updating the shop list...")
+
+        def work():
+            try:
+                changed, msg = E.sync_remote_catalog(E.get_settings(E.db()), force=not silent)
+            except Exception:  # noqa: BLE001
+                log_error(traceback.format_exc())
+                changed, msg = False, "couldn't update the shop list"
+
+            def done():
+                self._syncing = False
+                if changed:
+                    self.set_status(msg)
+                    self.refresh_store_views()
+                elif not silent:
+                    self.set_status(msg)
+            self.q.put(done)
+        threading.Thread(target=work, daemon=True).start()
+
+    def refresh_store_views(self):
+        """Re-draw the Sources window if it is open."""
+        for w in self.winfo_children():
+            if isinstance(w, StoresDialog):
+                try:
+                    w.refresh()
+                except Exception:  # noqa: BLE001
+                    pass
 
     def auto_update_check(self):
         """Every time Deals starts, quietly look for a new version."""
