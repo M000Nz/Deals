@@ -36,7 +36,7 @@ from urllib.parse import parse_qs, quote_plus, urlencode, urljoin, urlparse
 import requests
 from bs4 import BeautifulSoup
 
-ENGINE_VERSION = 22
+ENGINE_VERSION = 23
 DB_PATH = Path(__file__).parent / "dealscraper.db"
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
@@ -871,7 +871,8 @@ def _first_image(v, base: str) -> str | None:
 _NOT_PHOTO = re.compile(r"(?i)placeholder|blank\.|spacer|loading|pixel|1x1|transparent|no[-_]?image|noimage|default[-_]?image|"
                         r"spinner|lazy\.(?:gif|png)|data:image|\.gif(?:$|\?)")
 _NOT_PRODUCT = re.compile(r"(?i)logo|icon|badge|sprite|flag|star|rating|payment|afterpay|zippay|klarna|paypal|banner|"
-                          r"promo|award|trustpilot|swatch|avatar")
+                          r"promo|award|trustpilot|swatch|avatar|coming[-_]?soon|image[-_]?(?:not|unavailable|missing)|"
+                          r"not[-_]?available|missing|fallback|jb[-_]?hi[-_]?fi[-_]?(?:logo|image|default|placeholder)")
 
 
 def _best_srcset(ss: str, base: str) -> str | None:
@@ -1033,7 +1034,8 @@ def _best_title(node, a) -> str | None:
 
 
 _P_CLASS = re.compile(r"(?i)price|amount|\bnow\b|special|sale|final|current")
-_P_WAS = re.compile(r"(?i)\b(?:was|old|rrp|regular|original|orig|compare|list|strike|before|previous|msrp|retail)")
+# class names are often BEM/camelCase ("PriceTag_price__strike"), so look for the word after any non-letter, not just \b
+_P_WAS = re.compile(r"(?i)(?<![a-z])(?:was|old|rrp|regular|original|orig|compare|list|strike|struck|crossed|slash|ticket|before|previous|msrp|retail)")
 _P_BAD = re.compile(r"(?i)save|saving|discount|off\b|instal|afterpay|zip|klarna|humm|gift|bonus|badge|label|promo|offer|"
                     r"reward|points|cashback|rebate|delivery|shipping|finance|per[-_ ]?(?:week|month)|monthly|weekly|"
                     r"trade|voucher|credit|flag|ribbon|sticker|tag\b|callout|banner")
@@ -1042,7 +1044,7 @@ _P_BAD = re.compile(r"(?i)save|saving|discount|off\b|instal|afterpay|zip|klarna|
 def _structured_price(node) -> tuple[float | None, float | None]:
     """(price, was) read from elements the shop itself marks as price (itemprop, data-price, class='...price...').
     Skips badges, gift cards, instalments and savings. (None, None) when the card doesn't say."""
-    now, was = [], []
+    now, was, explicit = [], [], []
     for el in node.find_all(True):
         if el.name in ("script", "style"):
             continue
@@ -1052,7 +1054,7 @@ def _structured_price(node) -> tuple[float | None, float | None]:
         if ip == "price" or data:
             v = parse_price(str(el.get("content") or data or el.get_text(" ", strip=True)))
             if v and v > 0:
-                now.insert(0, v)                       # explicit machine-readable price wins
+                explicit.append(v)                     # explicit machine-readable price wins
             continue
         if not cls.strip() or not _P_CLASS.search(cls):
             continue
@@ -1078,8 +1080,17 @@ def _structured_price(node) -> tuple[float | None, float | None]:
         is_was = bool(_P_WAS.search(cls)) or el.name in ("del", "s", "strike") or any(
             p.name in ("del", "s", "strike") for p in el.parents if p is not node)
         (was if is_was else now).append(v)
-    price = now[0] if now else None
-    wasv = next((w for w in was if price and w > price * 1.02), None)
+    if explicit:
+        price = explicit[0]
+    elif now:
+        # several different "price" figures and none marked as a was-price: the lowest is what you pay, the highest
+        # is what it was (shops often mark the crossed-out price with an unusual class name)
+        price = min(now)
+        if max(now) > price * 1.02:
+            was.append(max(now))
+    else:
+        price = None
+    wasv = next((w for w in sorted(was, reverse=True) if price and w > price * 1.02), None)
     return price, wasv
 
 

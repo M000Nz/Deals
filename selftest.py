@@ -11,6 +11,7 @@ EXPECT = {
     "was_price_cards.html": {"qn90c": (999.0, 1499.0), "oled65c3": (2495.0, None)},
     "savings_noise.html": {"v15": (899.0, 1049.0)},
     "gift_card_badge.html": {"srf7100bb": (2199.0, None)},
+    "jb_ticket.html": {"epix": (677.0, 1699.0), "fenix": (1449.0, None)},
 }
 
 
