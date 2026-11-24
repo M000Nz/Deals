@@ -1,3 +1,5 @@
-34
+35
 https://github.com/M000Nz/Deals
-note: Pop-up messages (About, confirmations, errors, guides) now match the black-and-white look
+note: New modern look - a rounded, borderless window with a large Deals title top-left, with Search / Watchlist / Daily deals / For you tabs directly under it
+note: Custom minimise, maximise and close buttons, drag to move and resize from the edges
+note: Settings > window style switches back to the classic Windows frame if you prefer it (also a Start menu shortcut)

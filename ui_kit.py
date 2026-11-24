@@ -216,6 +216,177 @@ def draw_pill(cv, x, y, w, h, fill):
 # --------------------------------------------------------------------------- #
 # Widgets
 # --------------------------------------------------------------------------- #
+class _RECT(ctypes.Structure):
+    _fields_ = [("left", ctypes.c_long), ("top", ctypes.c_long), ("right", ctypes.c_long), ("bottom", ctypes.c_long)]
+
+
+class _MONITORINFO(ctypes.Structure):
+    _fields_ = [("cbSize", ctypes.c_ulong), ("rcMonitor", _RECT), ("rcWork", _RECT), ("dwFlags", ctypes.c_ulong)]
+
+
+class Frameless:
+    """Turns the main window into a borderless, rounded one that Deals draws itself (Windows only). Provides drag-to-move,
+    edge resizing, minimise / maximise / close, and keeps a taskbar icon. enable() returns False if anything fails, and
+    the app then keeps the normal Windows frame."""
+    GRIP = 7
+
+    def __init__(self, app):
+        self.app, self.hwnd, self.maxed, self.normal, self.on = app, None, False, None, False
+        self._drag = self._rs = None
+
+    # -- setup ---------------------------------------------------------------
+    def enable(self) -> bool:
+        if sys.platform != "win32":
+            return False
+        app = self.app
+        try:
+            app.update_idletasks()
+            app.overrideredirect(True)
+            app.update_idletasks()
+            u32 = ctypes.windll.user32
+            self.hwnd = u32.GetParent(app.winfo_id()) or app.winfo_id()
+            ex = u32.GetWindowLongW(self.hwnd, -20)
+            u32.SetWindowLongW(self.hwnd, -20, (ex & ~0x80) | 0x40000)        # not a tool window; show in the taskbar
+            app.withdraw()
+            app.after(40, self._finish)
+            self.on = True
+            self._grips()
+            return True
+        except Exception:  # noqa: BLE001
+            try:
+                app.overrideredirect(False)
+            except tk.TclError:
+                pass
+            self.on = False
+            return False
+
+    def _finish(self):
+        app = self.app
+        try:
+            app.deiconify()
+            app.update_idletasks()
+            self._corners(True)
+            self._shadow()
+            ctypes.windll.user32.SetForegroundWindow(self.hwnd)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _corners(self, rounded: bool):
+        try:                                                  # Windows 11: softly rounded corners (ignored on Windows 10)
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(self.hwnd, 33, ctypes.byref(ctypes.c_int(2 if rounded else 1)), 4)
+            P = self.app.P
+            r, g, b = rgb(P["border"])
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(self.hwnd, 34, ctypes.byref(ctypes.c_int(r | (g << 8) | (b << 16))), 4)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _shadow(self):
+        try:                                                  # a soft drop shadow, as normal windows have
+            class MARGINS(ctypes.Structure):
+                _fields_ = [("l", ctypes.c_int), ("r", ctypes.c_int), ("t", ctypes.c_int), ("b", ctypes.c_int)]
+            ctypes.windll.dwmapi.DwmExtendFrameIntoClientArea(self.hwnd, ctypes.byref(MARGINS(1, 1, 1, 1)))
+        except Exception:  # noqa: BLE001
+            pass
+
+    # -- move ----------------------------------------------------------------
+    def drag_handle(self, widget):
+        widget.bind("<ButtonPress-1>", self._p, add="+")
+        widget.bind("<B1-Motion>", self._m, add="+")
+        widget.bind("<Double-Button-1>", lambda e: self.toggle_max(), add="+")
+
+    def _p(self, e):
+        self._drag = (e.x_root - self.app.winfo_x(), e.y_root - self.app.winfo_y())
+
+    def _m(self, e):
+        if self.maxed or not self._drag:
+            return
+        self.app.geometry(f"+{e.x_root - self._drag[0]}+{e.y_root - self._drag[1]}")
+
+    # -- min / max / close ---------------------------------------------------
+    def minimize(self):
+        try:
+            ctypes.windll.user32.ShowWindow(self.hwnd, 6)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def toggle_max(self):
+        app = self.app
+        if self.maxed:
+            if self.normal:
+                app.geometry(self.normal)
+            self.maxed = False
+            self._corners(True)
+            return
+        self.normal = app.geometry()
+        try:
+            u32 = ctypes.windll.user32
+            mi = _MONITORINFO()
+            mi.cbSize = ctypes.sizeof(mi)
+            u32.GetMonitorInfoW(u32.MonitorFromWindow(self.hwnd, 2), ctypes.byref(mi))
+            w = mi.rcWork
+            app.geometry(f"{w.right - w.left}x{w.bottom - w.top}+{w.left}+{w.top}")
+        except Exception:  # noqa: BLE001
+            app.geometry(f"{app.winfo_screenwidth()}x{app.winfo_screenheight() - px(48)}+0+0")
+        self.maxed = True
+        self._corners(False)
+
+    # -- resize --------------------------------------------------------------
+    def _grips(self):
+        app, g = self.app, px(self.GRIP)
+        spec = [("n", dict(relx=0, rely=0, relwidth=1, height=g), "sb_v_double_arrow"),
+                ("s", dict(relx=0, rely=1, relwidth=1, height=g, y=-g), "sb_v_double_arrow"),
+                ("w", dict(relx=0, rely=0, relheight=1, width=g), "sb_h_double_arrow"),
+                ("e", dict(relx=1, rely=0, relheight=1, width=g, x=-g), "sb_h_double_arrow"),
+                ("nw", dict(relx=0, rely=0, width=2 * g, height=2 * g), "size_nw_se"),
+                ("ne", dict(relx=1, rely=0, width=2 * g, height=2 * g, x=-2 * g), "size_ne_sw"),
+                ("sw", dict(relx=0, rely=1, width=2 * g, height=2 * g, y=-2 * g), "size_ne_sw"),
+                ("se", dict(relx=1, rely=1, width=2 * g, height=2 * g, x=-2 * g, y=-2 * g), "size_nw_se")]
+        self.grips = []
+        for side, place, cursor in spec:
+            f = tk.Frame(app, cursor=cursor, bd=0, highlightthickness=0)
+            f.place(**place)
+            f.bind("<ButtonPress-1>", lambda e, s=side: self._rp(e, s))
+            f.bind("<B1-Motion>", self._rm)
+            self.grips.append(f)
+
+    def raise_grips(self):
+        for f in getattr(self, "grips", []):
+            try:
+                f.lift()
+            except tk.TclError:
+                pass
+
+    def recolour(self, bg):
+        for f in getattr(self, "grips", []):
+            try:
+                f.configure(bg=bg)
+            except tk.TclError:
+                pass
+
+    def _rp(self, e, side):
+        a = self.app
+        self._rs = (side, e.x_root, e.y_root, a.winfo_x(), a.winfo_y(), a.winfo_width(), a.winfo_height())
+
+    def _rm(self, e):
+        if not self._rs or self.maxed:
+            return
+        side, x0, y0, wx, wy, ww, wh = self._rs
+        dx, dy = e.x_root - x0, e.y_root - y0
+        mw, mh = self.app.minsize()
+        x, y, w, h = wx, wy, ww, wh
+        if "e" in side:
+            w = max(mw, ww + dx)
+        if "s" in side:
+            h = max(mh, wh + dy)
+        if "w" in side:
+            w = max(mw, ww - dx)
+            x = wx + (ww - w)
+        if "n" in side:
+            h = max(mh, wh - dy)
+            y = wy + (wh - h)
+        self.app.geometry(f"{w}x{h}+{x}+{y}")
+
+
 def cap(t):
     """Start with a capital letter (leaves iPhone / eBay / URLs alone)."""
     if isinstance(t, str) and len(t) > 1 and t[0].isalpha() and t[0].islower() and not t[1].isupper() \

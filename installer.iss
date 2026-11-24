@@ -37,6 +37,7 @@ Source: "dist\Deals\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs cr
 [Icons]
 Name: "{autoprograms}\Deals"; Filename: "{app}\Deals.exe"; IconFilename: "{app}\Deals.exe"
 Name: "{autodesktop}\Deals"; Filename: "{app}\Deals.exe"; Tasks: desktopicon
+Name: "{autoprograms}\Deals (classic window)"; Filename: "{app}\Deals.exe"; Parameters: "--classic"; IconFilename: "{app}\Deals.exe"
 
 [Run]
 ; Runs after a normal install (ticked checkbox) and after a silent self-update (starts the new version automatically).

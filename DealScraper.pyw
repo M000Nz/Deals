@@ -154,7 +154,7 @@ def ensure_deps():
 ensure_deps()
 import engine as E  # noqa: E402
 
-if getattr(E, "ENGINE_VERSION", 0) < 34:
+if getattr(E, "ENGINE_VERSION", 0) < 35:
     _r = tk.Tk()
     _r.withdraw()
     messagebox.showerror("Deals", "engine.py is out of date.\n\nReplace it with the new engine.py from the "
@@ -1064,7 +1064,8 @@ class App(tk.Tk):
         self.f_bold, self.f_bold_u = (fam, 10, "bold"), (fam, 10, "bold underline")
         self.f_big, self.f_title = (fam, 12, "bold"), (fam, 13, "bold")
         self.f_small_b = (fam, 9, "bold")
-        self.f_hero = (fam, 30, "bold")
+        self.f_hero = (fam, 26, "bold")
+        self.f_logo = (fam, 26, "bold")
         self.f_page = (fam, 18, "bold")
         self.fm = {"title": tkfont.Font(font=(fam, 10)), "price": tkfont.Font(font=(fam, 14, "bold")),
                    "small": tkfont.Font(font=(fam, 9)), "small_b": tkfont.Font(font=(fam, 9, "bold")),
@@ -1111,7 +1112,14 @@ class App(tk.Tk):
 
         self.configure(bg=self.P["bg"])
         self.geometry(self.initial_geometry(s))
+        self.chrome = ui.Frameless(self)
+        self.wants_frameless = (sys.platform == "win32" and s.get("classic_frame", "0") != "1"
+                                and "--classic" not in sys.argv)
         self.build()
+        if self.wants_frameless and not self.chrome.enable():
+            log_error("Custom window frame couldn't be set up; using the normal Windows frame.")
+        self.chrome.raise_grips()
+        self.chrome.recolour(self.P["bg"])
         self.bind_all("<MouseWheel>", self._wheel)
         self.bind_all("<Button-4>", self._wheel)
         self.bind_all("<Button-5>", self._wheel)
@@ -1125,7 +1133,7 @@ class App(tk.Tk):
             self.mark_deals_seen()
         self.update_badge()
         if "--minimized" in sys.argv:                     # started at login: stay out of the way, keep checking
-            self.after(400, self.iconify)
+            self.after(600, self.chrome.minimize if self.chrome.on else self.iconify)
         else:
             self.after(700, self.first_run_browser)
         self.after(150, self.pump)
@@ -1205,6 +1213,12 @@ class App(tk.Tk):
         except Exception:  # noqa: BLE001
             log_error(traceback.format_exc())
         try:
+            self.chrome.recolour(self.P["bg"])
+            if self.chrome.on:
+                self.chrome._corners(not self.chrome.maxed)        # keeps the thin window border in the new theme's colour
+        except Exception:  # noqa: BLE001
+            pass
+        try:
             self.prune()
             for w, role in self.reg_list:
                 self.style(w, role)
@@ -1278,27 +1292,37 @@ class App(tk.Tk):
     # --------------------------------------------------------------- layout --
     def build(self):
         self.search_var = tk.StringVar()
-        top = self.frame(self)
-        top.pack(fill="x", padx=16, pady=(10, 6))
-        logo = self.label(top, "Deals", font=self.f_title, cursor="hand2")
-        logo.pack(side="left", padx=(0, 16))
+        titlebar = self.frame(self)
+        titlebar.pack(fill="x")
+        top = self.frame(titlebar)
+        top.pack(fill="x", padx=(20, 0), pady=(10, 0))
+        logo = self.label(top, "Deals", font=self.f_logo, cursor="hand2")
+        logo.pack(side="left")
         logo.bind("<Button-1>", lambda e: self.show_home())
-        tabs = self.frame(top)
+        tabsrow = self.frame(self)
+        tabsrow.pack(fill="x", padx=20, pady=(4, 8))
+        tabs = self.frame(tabsrow)
         tabs.pack(side="left")
         self.tab_btn = {
-            "search": self.button(tabs, "Search", self.show_search_tab, font=self.f_bold, pad=(16, 5), style="solid"),
-            "watch": self.button(tabs, "Watchlist", self.show_watch, font=self.f_bold, pad=(16, 5), style="ghost"),
-            "daily": self.button(tabs, "Daily deals", lambda: self.show_picks("daily"), font=self.f_bold, pad=(16, 5),
+            "search": self.button(tabs, "Search", self.show_search_tab, font=self.f_bold, pad=(18, 6), style="solid"),
+            "watch": self.button(tabs, "Watchlist", self.show_watch, font=self.f_bold, pad=(18, 6), style="ghost"),
+            "daily": self.button(tabs, "Daily deals", lambda: self.show_picks("daily"), font=self.f_bold, pad=(18, 6),
                                  style="ghost"),
-            "foryou": self.button(tabs, "For you", lambda: self.show_picks("foryou"), font=self.f_bold, pad=(16, 5),
+            "foryou": self.button(tabs, "For you", lambda: self.show_picks("foryou"), font=self.f_bold, pad=(18, 6),
                                   style="ghost")}
         self.tab_btn["search"].pack(side="left", padx=(0, 4))
         self.tab_btn["watch"].pack(side="left", padx=(0, 4))
         self.tab_btn["daily"].pack(side="left", padx=(0, 4))
         self.tab_btn["foryou"].pack(side="left")
 
+        if self.wants_frameless:                                    # our own minimise / maximise / close
+            wb = self.frame(top)
+            wb.pack(side="right", anchor="n")
+            for glyph, cmd, danger in (("\u2715", self.on_close, True), ("\u25a1", self.chrome.toggle_max, False),
+                                       ("\u2013", self.chrome.minimize, False)):
+                self.win_button(wb, glyph, cmd, danger).pack(side="right")
         self.theme_sw = self.reg(ui.ThemeToggle(self, top, self.dark, self.set_dark, self.tab_btn["search"].bh), "switch")
-        self.theme_sw.pack(side="right")
+        self.theme_sw.pack(side="right", padx=(0, 14), pady=(4, 0))
         menus = [
             ("Sources", [("manage sources...", lambda: StoresDialog(self)), ("test all sources", lambda: self.test_stores()),
                          ("add custom store...", lambda: self.add_store()), ("repair broken sources", self.run_repair), None,
@@ -1310,7 +1334,8 @@ class App(tk.Tk):
                           ("run at startup on / off", self.toggle_autostart), None,
                           ("export data (CSV)...", self.export_data), ("back up database...", self.backup_data),
                           ("restore database...", self.restore_data), None,
-                          ("colour pictures on / off", self.toggle_colour), ("light / dark", self.toggle_theme)]),
+                          ("colour pictures on / off", self.toggle_colour), ("light / dark", self.toggle_theme),
+                          ("window style: custom / classic", self.toggle_frame)]),
             ("Help", [("how it works", lambda: messagebox.showinfo("How it works", HOW)),
                       ("fair use and privacy", lambda: messagebox.showinfo("Fair use and privacy", TERMS)),
                       ("open error log", self.open_error_log), ("run self-check", self.run_selftest),
@@ -1318,7 +1343,10 @@ class App(tk.Tk):
                       ("about", lambda: messagebox.showinfo("About", f"Deals  -  version {E.ENGINE_VERSION}\nAustralian deal finder."))]),
         ]
         for i, (name, items) in enumerate(reversed(menus)):
-            Pop(self, top, name, items, pad=(10, 4), style="ghost").pack(side="right", padx=(0, 14 if i == 0 else 2))
+            Pop(self, top, name, items, pad=(10, 4), style="ghost").pack(side="right", padx=(0, 2 if i else 8), pady=(4, 0))
+        if self.wants_frameless:                                    # drag the window by its empty top area
+            for w in (titlebar, top, tabsrow):
+                self.chrome.drag_handle(w)
 
         # bars shown only on the results page
         self.bar_search = self.frame(self)
@@ -1413,12 +1441,36 @@ class App(tk.Tk):
             self.load_sub.configure(text=f"{done} of {total} sources checked")
             self.load_bar.set(done / total)
 
+    def win_button(self, parent, glyph, cmd, danger=False):
+        """A minimise / maximise / close button for the custom window frame."""
+        P = self.P
+        lab = tk.Label(parent, text=glyph, font=(self.f_norm[0], 11), bd=0, padx=px(17), pady=px(5), cursor="arrow")
+        self.reg(lab, "text")
+
+        def on(e):
+            lab.configure(bg="#e81123" if danger else self.P["hover"], fg="#ffffff" if danger else self.P["fg"])
+
+        def off(e):
+            lab.configure(bg=self.P["bg"], fg=self.P["fg"])
+        lab.bind("<Enter>", on)
+        lab.bind("<Leave>", off)
+        lab.bind("<Button-1>", lambda e: cmd())
+        return lab
+
+    def toggle_frame(self):
+        on = E.get_settings(E.db()).get("classic_frame", "0") != "1"
+        if not messagebox.askyesno("Window style", ("Switch to the classic Windows frame? " if on else
+                                   "Switch to Deals' custom rounded window? ") + "Deals will restart."):
+            return
+        E.set_setting(E.db(), "classic_frame", "1" if on else "0")
+        self.restart_app()
+
     def build_home(self):
         self.home = self.frame(self.main)
         box = self.frame(self.home)
         box.place(relx=0.5, rely=0.4, anchor="center")
-        self.label(box, "Deals", font=self.f_hero, anchor="center").pack()
-        self.label(box, "Australian prices and live deals, in one search", "muted", anchor="center").pack(pady=(2, 20))
+        self.label(box, "What are you looking for?", font=self.f_hero, anchor="center").pack()
+        self.label(box, "Australian prices and live deals, in one search", "muted", anchor="center").pack(pady=(4, 22))
         row = self.frame(box)
         row.pack()
         self.home_entry = self.entry(row, self.search_var, width=40, font=self.f_big, big=True)
@@ -1559,6 +1611,8 @@ class App(tk.Tk):
         return f"{w}x{h}+{(sw - w) // 2}+{max(0, (sh - h) // 2 - px(20))}"
 
     def style_window(self):
+        if getattr(self.chrome, "on", False):
+            return                                     # no Windows title bar to colour
         ui.style_titlebar(self, self.dark, self.P["bg"], self.P["fg"], self.P["border"])
 
     def set_icon(self):
@@ -3582,6 +3636,13 @@ def main():
     except Exception:  # noqa: BLE001
         err = traceback.format_exc()
         log_error(err)
+        if sys.platform == "win32" and "--classic" not in sys.argv:
+            try:                                           # the custom window frame may be the cause: try the normal one
+                args = (sys.argv[1:] if FROZEN else sys.argv) + ["--classic"]
+                subprocess.Popen([sys.executable] + args, env=E.clean_env())
+                return
+            except Exception:  # noqa: BLE001
+                pass
         try:
             r = tk.Tk()
             r.withdraw()
