@@ -1,5 +1,6 @@
-25
+26
 https://github.com/M000Nz/Deals
-note: Deals now installs like a normal Windows app (Deals-Setup.exe) and updates itself with one click
-note: Downloads are checked against a checksum before installing
-note: Your watchlist and settings are kept safe in your user folder when updating
+note: New D* app icon for the installer, desktop shortcut and window
+note: Restoring a backup now restarts Deals by itself and upgrades old backups
+note: On For you, Interested now clears the card but still teaches your suggestions
+note: Fixes a crash when opening a very old database
