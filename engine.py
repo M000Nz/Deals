@@ -37,7 +37,7 @@ from urllib.parse import parse_qs, quote, quote_plus, unquote, urlencode, urljoi
 import requests
 from bs4 import BeautifulSoup
 
-ENGINE_VERSION = 36
+ENGINE_VERSION = 37
 GITHUB_REPO = "M000Nz/Deals"
 GITHUB_API = "https://api.github.com"
 FROZEN = bool(getattr(sys, "frozen", False))                  # True when running as the packaged Deals.exe
@@ -107,6 +107,13 @@ CATALOG: dict[str, list[tuple[str, str]]] = {
         ("Bose AU", "https://www.bose.com.au/en_au/search.html?q={query}"),
         ("JBL AU", "https://www.jbl.com.au/search?q={query}"),
         ("Garmin AU", "https://www.garmin.com/en-AU/search/?query={query}"),
+        ("COROS AU", "https://au.coros.com/search?q={query}"),
+        ("Suunto AU", "https://www.suunto.com/en-au/search/?q={query}"),
+        ("Polar AU", "https://www.polar.com/au-en/search?q={query}"),
+        ("Amazfit AU", "https://au.amazfit.com/search?q={query}"),
+        ("Wahoo AU", "https://au.wahoofitness.com/search?q={query}"),
+        ("Strada Sports", "https://stradasports.com.au/search?q={query}"),
+        ("Running Warehouse AU", "https://www.runningwarehouse.com.au/searchresults.html?search_query={query}"),
         ("Razer AU", "https://www.razer.com/au-en/search?q={query}"),
         ("PlayStation Direct", "https://direct.playstation.com/en-au/search?q={query}"),
         ("Dyson AU", "https://www.dyson.com.au/search?q={query}"),
@@ -186,7 +193,8 @@ STORE_CATS = {
     "Microsoft AU": "tech gaming", "Appliances Online": "home", "Mobileciti": "tech", "Allphones": "tech",
     "PC Case Gear": "tech", "JW Computers": "tech", "Evatech": "tech", "Shopping Express": "tech home",
     "AusPCMarket": "tech", "Harris Technology": "tech", "Digidirect": "tech", "Ted's Cameras": "tech",
-    "Bose AU": "tech", "JBL AU": "tech", "Garmin AU": "tech sports", "Razer AU": "tech gaming",
+    "Bose AU": "tech", "JBL AU": "tech", "Garmin AU": "tech sports", "COROS AU": "tech sports", "Suunto AU": "tech sports outdoor", "Polar AU": "tech sports",
+    "Amazfit AU": "tech sports", "Wahoo AU": "tech sports", "Strada Sports": "sports", "Running Warehouse AU": "sports fashion", "Razer AU": "tech gaming",
     "PlayStation Direct": "gaming", "Dyson AU": "home beauty", "Gametraders": "gaming",
     "Bunnings": "diy garden home", "Mitre 10": "diy garden", "Total Tools": "diy auto", "Sydney Tools": "diy",
     "Flower Power": "garden", "IKEA AU": "home", "Amart Furniture": "home", "Fantastic Furniture": "home",
@@ -208,7 +216,7 @@ CATEGORY_WORDS = {
     "tech": "laptop notebook macbook ipad tablet phone iphone android smartphone galaxy pixel monitor display keyboard mouse "
             "headphones headphone earbuds airpods speaker soundbar tv television router modem ssd hdd nvme ram gpu cpu "
             "graphics motherboard processor charger cable usb hdmi camera lens drone gopro printer scanner webcam microphone "
-            "smartwatch watch fitbit garmin kindle projector nas switch vr oculus quest powerbank sony samsung lg apple bose sennheiser jbl logitech asus acer msi lenovo dell hp nvidia amd intel canon nikon panasonic philips xiaomi google huawei oppo oneplus anker ugreen tplink netgear ubiquiti seagate wd sandisk kingston corsair razer steelseries",
+            "smartwatch watch fitbit garmin coros suunto polar amazfit wahoo whoop oura  kindle projector nas switch vr oculus quest powerbank sony samsung lg apple bose sennheiser jbl logitech asus acer msi lenovo dell hp nvidia amd intel canon nikon panasonic philips xiaomi google huawei oppo oneplus anker ugreen tplink netgear ubiquiti seagate wd sandisk kingston corsair razer steelseries",
     "gaming": "playstation ps5 ps4 xbox switch nintendo steam game games gaming controller console zelda mario pokemon",
     "home": "fridge refrigerator freezer washer washing dryer dishwasher oven microwave cooktop rangehood vacuum robot "
             "airfryer fryer kettle toaster blender coffee espresso machine mattress sofa couch bed desk chair table lamp "
@@ -220,7 +228,7 @@ CATEGORY_WORDS = {
               "sprinkler hedge chainsaw blower",
     "fashion": "shoes sneakers boots jacket jeans shirt tshirt hoodie dress jumper pants shorts socks bag backpack wallet "
                "sunglasses nike adidas puma jordan asics newbalance uniqlo levis",
-    "sports": "nike adidas puma asics gym treadmill dumbbell weights kettlebell yoga bike bicycle ebike scooter golf tennis racquet cricket football "
+    "sports": "watch smartwatch coros suunto polar amazfit wahoo whoop garmin running triathlon nike adidas puma asics gym treadmill dumbbell weights kettlebell yoga bike bicycle ebike scooter golf tennis racquet cricket football "
               "soccer basketball surfboard wetsuit fishing rod reel swimming helmet protein",
     "outdoor": "tent camping sleeping swag hiking boots backpack esky cooler stove fishing kayak paddleboard 4wd",
     "baby": "pram stroller cot nappy nappies carseat capsule highchair bassinet baby toddler formula",
@@ -1855,6 +1863,7 @@ class Report(list):
     timed_out = 0  # stores that didn't answer within the time limit
     junk = 0       # too cheap to be the thing searched for (cases, stickers, parts...)
     hidden = 0     # from sites you've chosen to hide (eBay by default)
+    widened = False  # a thin search was automatically widened to every shop
     words: dict = {}  # word -> how many listings (before filtering) used it
 
 
@@ -2004,8 +2013,8 @@ def verify_store_prices(offers: list, limit: int = 24, budget: float = 9.0, cfg:
     return fixed
 
 
-def find_offers_many(queries: list[tuple], stores: list[dict], cfg: dict | None = None, progress=None,
-                     deadline: float = 45.0, skip_dead: bool = True) -> dict:
+def _find_pass(queries: list[tuple], stores: list[dict], cfg: dict | None = None, progress=None,
+               deadline: float = 45.0, skip_dead: bool = True) -> dict:
     """Scan every (search, store) pair at once on one shared pool. queries = [(key, keywords)].
     Returns {key: (offers ranked by relevance, Report)}. Slow stragglers are dropped after `deadline` seconds."""
     words, now = blocked_words(cfg), time.time()
@@ -2081,6 +2090,43 @@ def find_offers_many(queries: list[tuple], stores: list[dict], cfg: dict | None 
         record_health(con, sid, ok, kind)
         con.execute("UPDATE stores SET status=?, tested_at=? WHERE id=?", (status, time.time(), sid))
     con.commit()
+    return out
+
+
+WIDEN_BELOW = 3     # fewer relevant listings than this -> also try the shops that were skipped by category
+
+
+def find_offers_many(queries: list[tuple], stores: list[dict], cfg: dict | None = None, progress=None,
+                     deadline: float = 45.0, skip_dead: bool = True) -> dict:
+    """One scan on the shops that fit the product. A search that finds almost nothing is automatically
+    widened to the remaining shops (only for that search), so unusual products are still found."""
+    out = _find_pass(queries, stores, cfg, progress, deadline, skip_dead)
+    if (cfg or {}).get("scope", "smart") == "all" or (cfg or {}).get("widen", "1") == "0":
+        return out
+    thin = [(k, kw) for k, kw in queries
+            if k in out and out[k][1].skipped > 0 and sum(1 for o in out[k][0] if o.score >= 30) < WIDEN_BELOW]
+    for k, kw in thin:
+        try:
+            tried = {r["id"] for r in out[k][1]}
+            rest = [st for st in stores if st["id"] not in tried and not (st.get("skip_until") or 0) > time.time()]
+            if not rest:
+                continue
+            ranked2, rep2 = _find_pass([(k, kw)], rest, dict(cfg or {}, scope="all"), None, min(deadline, 40.0), skip_dead)[k]
+            ranked, rep = out[k]
+            have = {o.url for o in ranked}
+            merged = ranked + [o for o in ranked2 if o.url not in have]
+            merged.sort(key=lambda o: -o.score)
+            rep.extend(rep2)
+            rep.junk += rep2.junk
+            rep.hidden += rep2.hidden
+            rep.timed_out += rep2.timed_out
+            rep.skipped = 0
+            rep.widened = True
+            for w, n in rep2.words.items():
+                rep.words[w] = rep.words.get(w, 0) + n
+            out[k] = (merged, rep)
+        except Exception:  # noqa: BLE001
+            pass
     return out
 
 

@@ -1,5 +1,5 @@
-36
+37
 https://github.com/M000Nz/Deals
-note: Tidier top-right corner - menus, theme switch and window buttons now line up
-note: Fade animations when opening, minimising, restoring and closing
-note: Smoother window dragging and resizing, and no more stutter when restoring from minimised
+note: Broader search - if a search finds almost nothing, Deals now automatically tries every other shop too
+note: New sources for watches and wearables: COROS, Suunto, Polar, Amazfit, Wahoo, Strada Sports, Running Warehouse
+note: Watch and wearable brands (Coros, Suunto, Polar, Amazfit...) now search the sports shops as well
