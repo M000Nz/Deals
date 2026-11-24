@@ -37,7 +37,7 @@ from urllib.parse import parse_qs, quote, quote_plus, unquote, urlencode, urljoi
 import requests
 from bs4 import BeautifulSoup
 
-ENGINE_VERSION = 32
+ENGINE_VERSION = 33
 GITHUB_REPO = "M000Nz/Deals"
 GITHUB_API = "https://api.github.com"
 FROZEN = bool(getattr(sys, "frozen", False))                  # True when running as the packaged Deals.exe
@@ -2565,12 +2565,20 @@ def download_installer(m: dict, progress=None) -> tuple[bool, str]:
     return True, str(dest)
 
 
+def clean_env() -> dict:
+    """Environment for starting another copy of this program. A packaged app passes private variables to its children;
+    if the new copy inherits them it tries to reuse the old copy's files (which are being replaced) and silently fails to open."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("_PYI", "_MEIPASS"))}
+    env["PYINSTALLER_RESET_ENVIRONMENT"] = "1"
+    return env
+
+
 def run_installer(path: str) -> None:
     """Start the installer silently, detached from this process. The installer closes Deals if needed, installs over the
     old files (your data is kept in your user profile) and starts the new version."""
     flags = 0x00000008 | 0x00000200 if sys.platform == "win32" else 0                  # DETACHED_PROCESS | NEW_PROCESS_GROUP
     subprocess.Popen([path, "/SILENT", "/SUPPRESSMSGBOXES", "/CLOSEAPPLICATIONS", "/NORESTART"],
-                     close_fds=True, creationflags=flags)
+                     close_fds=True, creationflags=flags, env=clean_env())
 
 
 def download_update(m: dict, app_dir=None, progress=None) -> tuple[bool, str]:

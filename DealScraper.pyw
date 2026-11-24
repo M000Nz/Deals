@@ -124,7 +124,7 @@ def ensure_deps():
 ensure_deps()
 import engine as E  # noqa: E402
 
-if getattr(E, "ENGINE_VERSION", 0) < 32:
+if getattr(E, "ENGINE_VERSION", 0) < 33:
     _r = tk.Tk()
     _r.withdraw()
     messagebox.showerror("Deals", "engine.py is out of date.\n\nReplace it with the new engine.py from the "
@@ -3262,7 +3262,8 @@ class App(tk.Tk):
     def restart_app(self):
         try:
             args = sys.argv[1:] if FROZEN else sys.argv
-            subprocess.Popen([sys.executable] + args, cwd=os.path.dirname(os.path.abspath(sys.argv[0])) or None)
+            subprocess.Popen([sys.executable] + args, cwd=os.path.dirname(os.path.abspath(sys.argv[0])) or None,
+                             env=E.clean_env())
         except OSError:
             log_error(traceback.format_exc())
             return messagebox.showinfo("restart", "Couldn't restart automatically - please close and reopen Deals.")
