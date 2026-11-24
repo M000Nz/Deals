@@ -2303,19 +2303,19 @@ class App(tk.Tk):
         if verdict == "yes":
             self.label(row, "\u2713 Interested - we'll find more like this", "accent", font=self.f_small_b).pack(anchor="w", padx=px(4))
             return
-        self.button(row, "Interested", lambda: self.give_feedback(o, "yes", row), pad=(12, 4), style="solid").pack(
+        self.button(row, "Interested", lambda: self.give_feedback(o, "yes", row, holder), pad=(12, 4), style="solid").pack(
             side="left", padx=(0, 6))
         self.button(row, "Not interested", lambda: self.give_feedback(o, "no", row, holder), pad=(12, 4),
                     style="ghost").pack(side="left")
 
     def give_feedback(self, o, verdict, row, holder=None):
         E.set_feedback(E.db(), o.url, verdict, o.title)
-        if verdict == "yes":
-            for w in row.winfo_children():
-                w.destroy()
-            self.label(row, "\u2713 Interested - we'll find more like this", "accent", font=self.f_small_b).pack(
-                anchor="w", padx=px(4))
-            return
+        if verdict == "yes":                                 # remembered for your taste, but off the page to cut clutter
+            try:
+                self.toast("Noted - we'll find more like this")
+            except Exception:  # noqa: BLE001
+                pass
+            holder = holder or getattr(row, "master", None)
         if holder is not None and holder in self.pick_cells:
             self.pick_cells.remove(holder)
             holder.destroy()

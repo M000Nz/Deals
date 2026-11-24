@@ -2676,7 +2676,8 @@ def _store_pick(con, kind: str, o: Offer, pct: float, terms: str = ""):
 
 def pick_offers(con, kind: str, limit: int = 200) -> list[Offer]:
     """Saved picks as Offers (a 'was' price is stored so the normal card shows the saving)."""
-    fb = {r["url"] for r in con.execute("SELECT url FROM feedback WHERE verdict='no'")}
+    # "Not interested" hides a pick everywhere; on For you, "Interested" also takes it off the page (it is remembered for taste)
+    fb = {r["url"] for r in con.execute("SELECT url FROM feedback" + ("" if kind == "foryou" else " WHERE verdict='no'"))}
     rows = con.execute("SELECT * FROM picks WHERE kind=? ORDER BY found_at DESC, pct DESC LIMIT ?", (kind, limit)).fetchall()
     out = []
     for r in rows:
