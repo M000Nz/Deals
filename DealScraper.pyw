@@ -21,7 +21,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import tkinter as tk
 from tkinter import font as tkfont
-from tkinter import filedialog, messagebox, simpledialog
+from tkinter import filedialog, messagebox
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -2963,6 +2963,7 @@ class App(tk.Tk):
                 url = (d or {}).get("url", "").strip()
             except Exception:  # noqa: BLE001
                 log_error(traceback.format_exc())
+                from tkinter import simpledialog
                 url = (simpledialog.askstring("check for updates", "Update address (a link to a text file with the newest "
                                               "version number on the first line):", parent=self) or "").strip()
             if not url:
