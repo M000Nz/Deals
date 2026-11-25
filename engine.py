@@ -37,7 +37,7 @@ from urllib.parse import parse_qs, quote, quote_plus, unquote, urlencode, urljoi
 import requests
 from bs4 import BeautifulSoup
 
-ENGINE_VERSION = 61
+ENGINE_VERSION = 62
 GITHUB_REPO = "M000Nz/Deals"
 GITHUB_API = "https://api.github.com"
 FROZEN = bool(getattr(sys, "frozen", False))                  # True when running as the packaged Deals.exe
@@ -2445,6 +2445,8 @@ def _find_pass(queries: list[tuple], stores: list[dict], cfg: dict | None = None
                 late[k].append(st)
         ex.shutdown(wait=False, cancel_futures=True)
 
+    if _cancelled(cfg):                                       # stopped by a newer search: skip all the clean-up work
+        return {k: ([], Report([])) for k, _ in queries}
     con, out, seen = db(), {}, {}
     for k, kw in queries:
         raw = [o for _, offs, _ in results[k] for o in offs]

@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "stores": [
     {"name": "StaticICE (200+ AU stores)", "url": "https://www.staticice.com.au/cgi-bin/search.cgi?q={query}&spos=3", "cats": ["all"], "enabled": true},
     {"name": "Amazon AU", "url": "https://www.amazon.com.au/s?k={query}", "cats": ["general"], "enabled": true},
@@ -38,7 +38,7 @@
     {"name": "PC Case Gear", "url": "https://www.pccasegear.com/search?query={query}", "cats": ["tech"], "enabled": true},
     {"name": "JW Computers", "url": "https://www.jw.com.au/search?q={query}", "cats": ["tech"], "enabled": true},
     {"name": "Evatech", "url": "https://www.evatech.com.au/search?q={query}", "cats": ["tech"], "enabled": true},
-    {"name": "Shopping Express", "url": "https://www.shoppingexpress.com.au/search?q={query}", "cats": ["tech", "home"], "enabled": true},
+    {"name": "Shopping Express", "url": "https://www.shoppingexpress.com.au/?rf=kw&kw={query}", "cats": ["tech", "home"], "enabled": true, "note": "Search address updated (Maropost store)"},
     {"name": "AusPCMarket", "url": "https://www.auspcmarket.com.au/search?q={query}", "cats": ["tech"], "enabled": true},
     {"name": "Harris Technology", "url": "https://www.harristechnology.com.au/search?q={query}", "cats": ["tech"], "enabled": true},
     {"name": "Digidirect", "url": "https://www.digidirect.com.au/catalogsearch/result/?q={query}", "cats": ["tech"], "enabled": true},
@@ -94,7 +94,7 @@
     {"name": "Snowys", "url": "https://www.snowys.com.au/search?q={query}", "cats": ["outdoor"], "enabled": true},
     {"name": "Torpedo7 AU", "url": "https://www.torpedo7.com.au/search?q={query}", "cats": ["sports", "outdoor"], "enabled": true},
     {"name": "Nike AU", "url": "https://www.nike.com/au/w?q={query}", "cats": ["fashion", "sports"], "enabled": true},
-    {"name": "Adidas AU", "url": "https://www.adidas.com.au/search?q={query}", "cats": ["fashion", "sports"], "enabled": true},
+    {"name": "Adidas AU", "url": "https://www.adidas.com.au/search?q={query}", "cats": ["fashion", "sports"], "enabled": true, "browser": true, "note": "Strong bot protection - may still need Verify"},
     {"name": "The Iconic", "url": "https://www.theiconic.com.au/catalog/?q={query}", "cats": ["fashion"], "enabled": true},
     {"name": "Culture Kings", "url": "https://www.culturekings.com.au/search?q={query}", "cats": ["fashion"], "enabled": true},
     {"name": "Platypus Shoes", "url": "https://www.platypusshoes.com.au/search?q={query}", "cats": ["fashion"], "enabled": true},
@@ -123,7 +123,7 @@
     {"name": "Techbuy", "url": "https://www.techbuy.com.au/search?q={query}", "cats": ["tech"], "enabled": true},
     {"name": "Computer Lounge", "url": "https://www.computerlounge.com.au/search?q={query}", "cats": ["tech"], "enabled": true},
     {"name": "Austin Computers", "url": "https://www.austin.net.au/search?q={query}", "cats": ["tech"], "enabled": true},
-    {"name": "Aftershock PC", "url": "https://www.aftershockpc.com.au/search?q={query}", "cats": ["tech", "gaming"], "enabled": true},
+    {"name": "Aftershock PC", "url": "https://www.aftershockpc.com.au/search?q={query}", "cats": ["tech", "gaming"], "enabled": true, "browser": true, "note": "Needs the hidden browser to show products"},
     {"name": "Glink", "url": "https://www.glink.com.au/search?q={query}", "cats": ["tech"], "enabled": true},
     {"name": "Wireless1", "url": "https://www.wireless1.com.au/search?q={query}", "cats": ["tech"], "enabled": true},
     {"name": "Sony AU", "url": "https://www.sony.com.au/search?q={query}", "cats": ["tech", "gaming"], "enabled": true},

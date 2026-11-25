@@ -1142,24 +1142,38 @@ class Chart:
     def pack(self, **kw):
         self.cv.pack(**kw)
 
-    def _guides(self, w, h, lo, hi, pad):
-        """Dashed lines for the target price (accent) and the usual non-sale price (muted), labelled at the left."""
+    def _gutter(self):
+        """Room on the left for the guide labels, so they never sit on top of the graph."""
+        if not self.lines:
+            return 0
+        f = tkfont.Font(font=self.app.f_small)
+        return max(f.measure("target" if k == "target" else "usual") for _, k in self.lines) + px(12)
+
+    def _guides(self, w, h, lo, hi, pad, left=0):
+        """Dashed guide lines for the target price (accent) and the usual non-sale price (muted); each is named in the
+        left margin, level with its line, away from the graph."""
         cv, P = self.cv, self.app.P
-        for v, kind in self.lines:
+        fh = tkfont.Font(font=self.app.f_small).metrics("linespace")
+        last_y = None
+        for v, kind in sorted(self.lines, key=lambda t: -t[0]):
             y = h / 2 if hi == lo else (h - pad) - (h - 2 * pad) * (v - lo) / (hi - lo)
             col = P["accent"] if kind == "target" else P["muted"]
-            cv.create_line(pad, y, w - pad, y, fill=col, dash=(4, 3))
-            cv.create_text(pad + px(2), y - px(2), anchor="sw", text="target" if kind == "target" else "usual",
+            cv.create_line(left, y, w - pad, y, fill=col, dash=(4, 3))
+            ty = y if last_y is None or y - last_y >= fh else last_y + fh      # two labels close together: stack them
+            ty = min(max(ty, fh / 2), h - fh / 2)
+            cv.create_text(left - px(6), ty, anchor="e", text="target" if kind == "target" else "usual",
                            fill=col, font=self.app.f_small)
+            last_y = ty
 
     def draw(self, w, h):
         cv, P, pts, pad = self.cv, self.app.P, self.points, px(6)
+        left = self._gutter()
         cv.delete("all")
         cv._keep = []
         if w < 20 or h < 10:
             return
         if len(pts) < 2:
-            cv.create_line(pad, h // 2, w - pad, h // 2, fill=P["border"], dash=(2, 3))
+            cv.create_line(left + pad, h // 2, w - pad, h // 2, fill=P["border"], dash=(2, 3))
             if pts:
                 r = px(3)
                 cv.create_oval(w - pad - 2 * r, h // 2 - r, w - pad, h // 2 + r, fill=P["fg"], outline=P["fg"])
@@ -1168,7 +1182,7 @@ class Chart:
         lo, hi, n = min(every), max(every), len(pts)
         coords = []
         for i, v in enumerate(pts):
-            x = pad + (w - 2 * pad) * i / (n - 1)
+            x = left + pad + (w - left - 2 * pad) * i / (n - 1)
             y = h / 2 if hi == lo else (h - pad) - (h - 2 * pad) * (v - lo) / (hi - lo)
             coords.append((x, y))
         dot = P["accent"] if pts[-1] < pts[0] else P["fg"]
@@ -1196,11 +1210,11 @@ class Chart:
             ph = ImageTk.PhotoImage(big.resize((w, h), _resample()))
             cv._keep.append(ph)
             cv.create_image(0, 0, image=ph, anchor="nw")
-            self._guides(w, h, lo, hi, pad)
+            self._guides(w, h, lo, hi, pad, left)
             return
         flat = [c for xy in coords for c in xy]
         cv.create_line(*flat, fill=P["fg"], width=max(1, px(1)))
-        self._guides(w, h, lo, hi, pad)
+        self._guides(w, h, lo, hi, pad, left)
         x, y = coords[-1]
         r = px(3)
         cv.create_oval(x - r, y - r, x + r, y + r, fill=dot, outline=dot)

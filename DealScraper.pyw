@@ -157,7 +157,7 @@ def ensure_deps():
 ensure_deps()
 import engine as E  # noqa: E402
 
-if getattr(E, "ENGINE_VERSION", 0) < 61:
+if getattr(E, "ENGINE_VERSION", 0) < 62:
     _r = tk.Tk()
     _r.withdraw()
     messagebox.showerror("Deals", "engine.py is out of date.\n\nReplace it with the new engine.py from the "
@@ -1288,6 +1288,7 @@ class App(tk.Tk):
         self.tray, self._tray_told, self.tray_close = None, False, False
         self._testing_all, self._test_prog = False, None
         self._stream, self._stream_sig, self._dev_clicks, self._dev_t = False, None, 0, 0.0
+        self._sgen, self._scancel = 0, None               # which search is current, and how to stop the one before
         self.progs = []                                   # running progress cards (so a hidden one can be brought back)
         self._err_count = 0
         self.reg_list, self.scrollers = [], {}
@@ -2446,17 +2447,18 @@ class App(tk.Tk):
             return self.search_link(q)
         if not E.parse_keywords(q)[0]:
             return
-        if self.searching:
-            return
         self.stop_picks()
+        gen, cancel = self.begin_search()
         if self.view != "results":
             self.show_results_view()
         self.remember_search(q)
         con = E.db()
         cfg = E.get_settings(con)
         cfg["region"] = cfg.get("region") or self.region
+        cfg["_cancel"] = cancel
         stores = E.active_stores(con, cfg["region"])
         if not stores:
+            self.searching = False
             return messagebox.showinfo("search", "No sources are switched on. Open Sources > manage sources.")
         self.link_info = None
         self.fixed = None
@@ -2477,38 +2479,55 @@ class App(tk.Tk):
 
         def work():
             try:
-                prog = lambda d, t: self.q.put(lambda d=d, t=t: self.on_search_progress(d, t))
-                part = lambda offs, d, t: self.q.put(lambda offs=offs, d=d, t=t: self.on_search_partial(offs, d, t, run_q))
+                prog = lambda d, t, g=gen: self.q.put(lambda d=d, t=t: gen == self._sgen and self.on_search_progress(d, t))
+                part = lambda offs, d, t, g=gen: self.q.put(
+                    lambda offs=offs, d=d, t=t: gen == self._sgen and self.on_search_partial(offs, d, t, run_q))
                 offers, report = E.find_offers(run_q, stores, cfg, progress=prog, partial=part)
+                if gen != self._sgen:
+                    return                                       # a newer search took over: drop this one
                 if not offers and not exact:                    # nothing found: try a more forgiving spelling fix
                     q2, ch = E.correct_query(run_q, aggressive=True)
                     if not ch or q2 == run_q:                   # or borrow the spelling the shops' own results use
                         q2 = E.did_you_mean(run_q, getattr(report, "words", {})) or run_q
                     if q2 != run_q:
                         offers, report = E.find_offers(q2, stores, cfg, progress=prog)
+                        if gen != self._sgen:
+                            return
                         if offers:
                             self.fixed, self.query = (q, q2), q2
-                self.q.put(lambda: self.show_results(offers, report))
+                self.q.put(lambda: gen == self._sgen and self.show_results(offers, report))
             except Exception:  # noqa: BLE001
                 log_error(traceback.format_exc())
-                self.q.put(lambda: self.show_results([], []))
+                self.q.put(lambda: gen == self._sgen and self.show_results([], []))
 
         threading.Thread(target=work, daemon=True).start()
 
+    def begin_search(self):
+        """A new search always wins: the one still running is told to stop and its late answers are ignored."""
+        if self._scancel is not None:
+            self._scancel.set()
+        self._sgen += 1
+        self._scancel = threading.Event()
+        self.searching = True
+        self.hide_loading()
+        return self._sgen, self._scancel
+
     def search_link(self, url):
         """Pasted product link: read it, then search every other store for the same product."""
-        if self.searching:
-            return
         self.stop_picks()
+        gen, cancel = self.begin_search()
         if self.view != "results":
             self.show_results_view()
         con = E.db()
         cfg = E.get_settings(con)
         cfg["region"] = cfg.get("region") or self.region
+        cfg["_cancel"] = cancel
         stores = E.active_stores(con, cfg["region"])
         if not stores:
+            self.searching = False
             return messagebox.showinfo("search", "No sources are switched on. Open Sources > manage sources.")
         self.searching, self.link_info, self.fixed = True, None, None
+        self._stream, self._stream_sig = False, None
         self.set_status("reading that product page...")
         self.show_loading(len(stores), "Reading the product page...")
 
@@ -2517,24 +2536,31 @@ class App(tk.Tk):
                 info = E.product_from_url(url, cfg)
             except Exception as e:  # noqa: BLE001
                 msg = str(getattr(e, "kind", "") and f"{e}" or e)
-                self.q.put(lambda: self.link_failed(msg))
+                self.q.put(lambda: gen == self._sgen and self.link_failed(msg))
                 return
-            self.q.put(lambda: (self.set_status(f"searching {len(stores)} sources for {info['query']}..."),
-                                self.search_var.set(info["query"])))
+            if gen != self._sgen:
+                return
+            self.q.put(lambda: gen == self._sgen and (self.set_status(f"searching {len(stores)} sources for {info['query']}..."),
+                                                      self.search_var.set(info["query"])))
             try:
-                prog = lambda d, t: self.q.put(lambda d=d, t=t: self.on_search_progress(d, t))
+                prog = lambda d, t: self.q.put(lambda d=d, t=t: gen == self._sgen and self.on_search_progress(d, t))
                 offers, report = E.find_offers(info["query"], stores, cfg, progress=prog)
-                self.q.put(lambda: self.load_sub.configure(text="Checking which results are the exact same product..."))
+                if gen != self._sgen:
+                    return
+                self.q.put(lambda: gen == self._sgen and self.load_sub.configure(
+                    text="Checking which results are the exact same product..."))
                 try:
                     info["different"] = E.match_link_offers(info, offers)
                     offers = [o for o in offers if o.match != "different"]
                 except Exception:  # noqa: BLE001
                     log_error(traceback.format_exc())
                     info["different"] = 0
-                self.q.put(lambda: self.link_done(info, offers, report))
+                if gen != self._sgen:
+                    return
+                self.q.put(lambda: gen == self._sgen and self.link_done(info, offers, report))
             except Exception:  # noqa: BLE001
                 log_error(traceback.format_exc())
-                self.q.put(lambda: self.link_done(info, [], []))
+                self.q.put(lambda: gen == self._sgen and self.link_done(info, [], []))
 
         threading.Thread(target=work, daemon=True).start()
 
