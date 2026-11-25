@@ -37,7 +37,7 @@ from urllib.parse import parse_qs, quote, quote_plus, unquote, urlencode, urljoi
 import requests
 from bs4 import BeautifulSoup
 
-ENGINE_VERSION = 82
+ENGINE_VERSION = 83
 GITHUB_REPO = "M000Nz/Deals"
 GITHUB_API = "https://api.github.com"
 FROZEN = bool(getattr(sys, "frozen", False))                  # True when running as the packaged Deals.exe
@@ -2414,7 +2414,7 @@ def _scan_order(st: dict, cats: set) -> tuple:
         tier = 2
     else:
         tier = 3
-    return (tier + (4 if st.get("use_browser") else 0), st.get("name", ""))
+    return (tier, st.get("name", ""))
 DEAD_AFTER = 3          # a store that fails this many times in a row is paused for a day (then 2, 4, 7 days)
 FAIL_KINDS = {"blocked", "notfound", "needsjs", "botcheck", "nobrowser", "error"}
 
@@ -2579,11 +2579,14 @@ def _find_pass(queries: list[tuple], stores: list[dict], cfg: dict | None = None
     picked = {k: select_stores(live, kw, cfg) for k, kw in queries}
     total = sum(len(v) for v in picked.values())
     ex = ThreadPoolExecutor(max_workers=max(1, min(POOL_WORKERS, total)))
+    exb = ThreadPoolExecutor(max_workers=4)             # shops that need the hidden browser get their own lane, so they
+    use_b = browser_wanted(cfg)                         # (Amazon, Big W, Officeworks...) start at once and don't wait behind every plain shop
     futs = {}
     for k, kw in queries:
         cats = detect_categories(kw)
         for st in sorted(picked[k], key=lambda s: _scan_order(s, cats)):
-            futs[ex.submit(_scan_one, dict(st), kw, cfg)] = (k, st)
+            pool = exb if (use_b and st.get("use_browser")) else ex
+            futs[pool.submit(_scan_one, dict(st), kw, cfg)] = (k, st)
     done, t0, cut, pending = 0, time.time(), deadline, set(futs)
     last_partial, sent = 0.0, None
     try:
@@ -2618,6 +2621,7 @@ def _find_pass(queries: list[tuple], stores: list[dict], cfg: dict | None = None
                 fut.cancel()
                 late[k].append(st)
         ex.shutdown(wait=False, cancel_futures=True)
+        exb.shutdown(wait=False, cancel_futures=True)
 
     if _cancelled(cfg):                                       # stopped by a newer search: skip all the clean-up work
         return {k: ([], Report([])) for k, _ in queries}
