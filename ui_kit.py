@@ -1015,7 +1015,10 @@ class ProgressBar(tk.Canvas):
         self.redraw()
 
     def set(self, frac):
-        self.frac = max(0.0, min(1.0, float(frac)))
+        frac = max(0.0, min(1.0, float(frac)))
+        if abs(frac - self.frac) < 0.004 and (frac not in (0.0, 1.0) or frac == self.frac):
+            return                                    # nothing visible would change: skip the redraw
+        self.frac = frac
         self.redraw()
 
     def redraw(self):

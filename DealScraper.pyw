@@ -157,7 +157,7 @@ def ensure_deps():
 ensure_deps()
 import engine as E  # noqa: E402
 
-if getattr(E, "ENGINE_VERSION", 0) < 97:
+if getattr(E, "ENGINE_VERSION", 0) < 98:
     _r = tk.Tk()
     _r.withdraw()
     messagebox.showerror("Deals", "engine.py is out of date.\n\nReplace it with the new engine.py from the "
@@ -1650,7 +1650,9 @@ class App(tk.Tk):
         except Exception:  # noqa: BLE001  (a widget that can't take a colour must never break the app)
             pass
 
-    def prune(self):
+    def prune(self, force=False):
+        if not force and len(self.reg_list) < 2500:      # checking every widget on every redraw is wasted work while the list is short
+            return
         live = []
         for w, role in self.reg_list:
             try:
@@ -1672,7 +1674,7 @@ class App(tk.Tk):
         except Exception:  # noqa: BLE001
             pass
         try:
-            self.prune()
+            self.prune(True)
             for w, role in self.reg_list:
                 self.style(w, role)
             self.render_watch()
@@ -1973,7 +1975,7 @@ class App(tk.Tk):
         if sig == self._stream_sig:
             return
         now = time.time()
-        if not first and now - getattr(self, "_stream_at", 0) < 2.5:     # redrawing every card is costly: at most every 2.5 s
+        if not first and now - getattr(self, "_stream_at", 0) < 4.0:     # redrawing every card is costly: at most every 4 s
             return
         self._stream_at = now
         if not first:
@@ -5105,6 +5107,10 @@ class App(tk.Tk):
 def main():
     try:
         E.lower_priority()
+        try:
+            sys.setswitchinterval(0.002)              # background threads hand the window its turn sooner (default 5 ms)
+        except Exception:  # noqa: BLE001
+            pass
         E.start_resource_log()
         App().mainloop()
     except Exception:  # noqa: BLE001

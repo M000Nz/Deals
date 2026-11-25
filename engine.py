@@ -37,7 +37,7 @@ from urllib.parse import parse_qs, quote, quote_plus, unquote, urlencode, urljoi
 import requests
 from bs4 import BeautifulSoup
 
-ENGINE_VERSION = 97
+ENGINE_VERSION = 98
 GITHUB_REPO = "M000Nz/Deals"
 GITHUB_API = "https://api.github.com"
 FROZEN = bool(getattr(sys, "frozen", False))                  # True when running as the packaged Deals.exe
@@ -863,7 +863,8 @@ TRACKERS = ("google-analytics", "googletagmanager", "doubleclick", "googlesyndic
             "facebook.com/tr", "hotjar", "clarity.ms", "segment.io", "segment.com", "newrelic", "nr-data",
             "tiktok", "pinterest", "criteo", "taboola", "outbrain", "optimizely", "intercom", "zendesk",
             "livechat", "tawk.to", "bing.com/bat", "snapchat", "klaviyo", "yotpo", "trustpilot",
-            "gorgias", "tidio", "crisp.chat", "drift.com", "zdassets", "freshchat", "smooch", "olark")
+            "gorgias", "tidio", "crisp.chat", "drift.com", "zdassets", "freshchat", "smooch", "olark",
+            "fullstory", "mouseflow", "mixpanel", "amplitude", "adsrvr", "adnxs", "googleadservices", "bugsnag", "sentry.io")
 
 
 def browser_state_path() -> Path:
@@ -1076,7 +1077,8 @@ class BrowserEngine:
 
                 async def gate(route):                       # skip pictures, fonts and trackers: faster, same prices
                     req = route.request
-                    skip = ("image", "media") if warm else ("image", "media", "font", "stylesheet")
+                    skip = ("image", "media", "texttrack", "eventsource", "websocket", "manifest") if warm else (
+                        "image", "media", "font", "stylesheet", "texttrack", "eventsource", "websocket", "manifest")
                     if req.resource_type in skip or any(t in req.url for t in TRACKERS):
                         await route.abort()
                     else:
@@ -1294,10 +1296,16 @@ def _capped_text(node, limit: int = 700) -> str | None:
     return " ".join(parts)
 
 
+_NOISE_RE = re.compile(r"(?is)<(svg|style|iframe)\b[^>]*>.*?</\1\s*>")
+_PARSE_SEM = threading.BoundedSemaphore(2)    # parsing holds Python's one-at-a-time lock; 12 parsers at once starve the window
+
+
 def make_soup(page: str) -> BeautifulSoup:
     """Parse with lxml when installed (several times faster than html.parser); cap huge pages."""
     if len(page) > 1_500_000:
         page = page[:1_500_000]
+    if len(page) > 60_000:                               # pictures-as-code, styles and frames never hold products: less to parse
+        page = _NOISE_RE.sub("", page)
     try:
         import lxml  # noqa: F401
         soup = BeautifulSoup(page, "lxml")
@@ -1948,6 +1956,11 @@ def _shopify_offers(store: dict, base: str, query: str) -> list[Offer]:
 
 
 def _parse_store_page(page: str, url: str, store: dict) -> list[Offer]:
+    with _PARSE_SEM:
+        return _parse_store_page_now(page, url, store)
+
+
+def _parse_store_page_now(page: str, url: str, store: dict) -> list[Offer]:
     soup = make_soup(page)
     if store.get("item"):
         return _selector_offers(soup, url, store)

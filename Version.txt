@@ -1,5 +1,6 @@
-97
+98
 https://github.com/M000Nz/Deals
+note: Lower CPU and a smoother window while searching: at most 2 shop pages are read at once (so the window gets its turn), pictures/styles/frames are skipped when reading pages, the browser skips more background traffic, the results list redraws less often while it fills, and several small background checks were trimmed
 note: Smoother over time: product pictures from earlier searches are now released instead of piling up in memory, the rounded-picture mask is built once, old cached shop results are cleared out, and idle background wake-ups are fewer
 note: Search matching fix: short words like 'Pro', 'Max' or 'Air' no longer match the start of longer words ('Pro' matched 'Protective', so a Garmin Striker sun cover showed up for 'Garmin epix Pro')
 note: Watchlist safeguard: a listing priced far below the item's usual price with no real 'was' price (e.g. a $35 strap for a $1,100 watch) is no longer treated as the product, and such points already in the price history are cleared on the next check
