@@ -2467,6 +2467,7 @@ JUNK_RATIO = 0.10      # a listing priced 90%+ below the typical price is treate
 
 class Report(list):
     """Per-store results (a plain list) that also says how many listings were filtered out."""
+    paused_names: tuple = ()   # which of those would otherwise have been searched for this query
     paused = 0     # stores skipped because they keep failing (retried every day or so)
     skipped = 0    # stores not searched because they do not sell this kind of product
     timed_out = 0  # stores that didn't answer within the time limit
@@ -2795,6 +2796,7 @@ def _find_pass(queries: list[tuple], stores: list[dict], cfg: dict | None = None
             for w in set(re.findall(r"[a-z]{4,}", o.title.lower())):
                 report.words[w] = report.words.get(w, 0) + 1
         report.paused, report.timed_out = len(paused), len(late[k])
+        report.paused_names = tuple(st['name'] for st in select_stores(paused, kw, cfg)) if paused else ()
         report.skipped = len(live) - len(picked[k])
         out[k] = (ranked, report)
         for s, offs, err in results[k]:
@@ -2900,6 +2902,8 @@ def _note_search(queries: list[tuple], out: dict) -> None:
         lines.append(f"Filtered out: {rep.junk} too cheap to be the product (cases, parts), {rep.hidden} from hidden sites.")
         lines.append(f"Not searched: {rep.skipped} (wrong category), {rep.paused} paused after repeated failures, "
                      f"{rep.timed_out} too slow." + ("  Widened to every shop." if rep.widened else ""))
+        if getattr(rep, "paused_names", ()):
+            lines.append("Paused shops that WOULD have been searched: " + ", ".join(rep.paused_names))
         if rep.second_tried:
             lines.append(f"Second pass: {rep.second_tried} slow shops tried again after the first results, {rep.second_added} new listings added.")
         lines += ["", "SHOPS (listings returned)"]
@@ -3008,7 +3012,7 @@ def second_pass(keywords: str, stores: list[dict], offers: list, report, cfg: di
     merged = sorted(list(offers) + new, key=lambda o: (-o.score, o.price))
     tried = {st["id"] for st in todo}
     rep = Report([r for r in report if r["id"] not in tried] + list(rep2))
-    for a in ("paused", "skipped", "widened", "words", "ozb_titles"):
+    for a in ("paused", "paused_names", "skipped", "widened", "words", "ozb_titles"):
         setattr(rep, a, getattr(report, a, getattr(Report, a)))
     rep.junk, rep.hidden = report.junk + rep2.junk, report.hidden + rep2.hidden
     seen_h = {o.url for o, _ in report.hidden_offers}
