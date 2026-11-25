@@ -37,7 +37,7 @@ from urllib.parse import parse_qs, quote, quote_plus, unquote, urlencode, urljoi
 import requests
 from bs4 import BeautifulSoup
 
-ENGINE_VERSION = 71
+ENGINE_VERSION = 72
 GITHUB_REPO = "M000Nz/Deals"
 GITHUB_API = "https://api.github.com"
 FROZEN = bool(getattr(sys, "frozen", False))                  # True when running as the packaged Deals.exe
@@ -2417,7 +2417,7 @@ def reset_health(con):
 
 # Stores whose search pages are built by JavaScript and have shown the wrong figure as the price. For these, each
 # product's own page is read for the price the shop publishes in its page tags - that one is always the real price.
-VERIFY_STORES = ("jb hi-fi", "jbhifi")
+VERIFY_STORES = ("jb hi-fi", "jbhifi", "bing lee", "binglee", "betta")
 _PAGE_PRICE_CACHE: dict[str, tuple[float, float | None]] = {}
 
 
@@ -2457,7 +2457,10 @@ def page_price(html: str) -> float | None:
 
 def verify_store_prices(offers: list, limit: int = 24, budget: float = 9.0, cfg: dict | None = None) -> int:
     """Correct prices from the product pages of VERIFY_STORES. Returns how many prices were changed."""
-    todo = [o for o in offers if o.source == "store" and any(w in o.store.lower() for w in VERIFY_STORES)][:limit]
+    # Price-comparison listings (StaticICE) are checked too: they often carry an old regular price while the shop's own
+    # page already shows the sale price (this is how a $677 sale showed as $1,699).
+    todo = [o for o in offers if o.source in ("store", "staticice")
+            and (any(w in o.store.lower() for w in VERIFY_STORES) or any(w in o.url.lower() for w in VERIFY_STORES))][:limit]
     if not todo:
         return 0
     fixed, now = 0, time.time()

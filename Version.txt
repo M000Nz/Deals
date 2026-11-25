@@ -1,5 +1,6 @@
-71
+72
 https://github.com/M000Nz/Deals
+note: Price fix: JB Hi-Fi (and Bing Lee / Betta) prices that come from price-comparison listings are now re-checked against the shop's own product page, so sale prices show instead of the old regular price
 note: Amazon results are now read from Amazon's own result markup: correct titles (they were showing pieces like '. 99 RRP'), the price you pay vs the crossed-out RRP, and clean product links
 note: Diagnostics now include a price audit (JB Hi-Fi, Bing Lee, Betta Home Living, Amazon): what Deals read for each product next to the shop's own page markup, so wrong prices can be fixed from real pages
 note: Product pictures: the + and star buttons are now clean round buttons (no square corners over light photos), and their hint labels sit on the picture inside the card instead of getting cut off
