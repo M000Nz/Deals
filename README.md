@@ -50,7 +50,8 @@ Your watchlist, price history and settings live in `%APPDATA%\Deals`, so updatin
 | **Real discounts first** | A result only counts as a deal if there's evidence: a marked-down price, a price that fell since your last check, or a vetted OzBargain post (with its discount code when it lists a real one). Everything else sits under *Regular prices*. |
 | **Watchlist with alerts** | Follow a product, set a target price, and get alerted on desktop, ntfy, Discord, Telegram or email. Each item keeps a price-history graph and a **Buy now / Wait / Fair price** verdict based on its own history and the sale calendar. |
 | **Daily deals** | The biggest discounts on big-ticket items, refreshed daily. Pick a **category** (golf, cycling, camping, music, gaming...) to search that hobby directly. |
-| **For you** | Suggestions based on what you follow and like, with a few outliers mixed in so it never goes stale. |
+| **For you** | Suggestions based on what you follow and like, with a few outliers mixed in. **Find more** gives you a fresh page every time; **Interested** finds similar deals straight away and **Not interested** clears that brand and type. |
+| **Daily digest (opt in)** | Pick up to 5 categories and get the best new deals in just those, once a day, to your phone or inbox. Off unless you turn it on. |
 | **Paste a link** | Paste any product link and Deals finds the same product at every other shop - confirmed by barcode or model code, with different models left out. |
 | **Exact matches** | Model numbers are respected - *galaxy watch 6* never shows a Watch 5. Name a brand and only that brand appears. |
 | **Spelling forgiven** | *samsnug galxy* and *play station 5* are corrected automatically. |
@@ -166,7 +167,7 @@ python selftest.py            # checks the price reader against saved example pa
 
 1. Raise `ENGINE_VERSION` in `engine.py`, and the matching check in `DealScraper.pyw`.
 2. Put the version on the first line of `Version.txt`, the repository URL on the second, then one `note:` line per change.
-3. Commit and push, then run the **release** workflow (Actions → *Run workflow*) with the tag, e.g. `v63`.
+3. Commit and push, then run the **release** workflow (Actions → *Run workflow*) with the tag, e.g. `v64`.
 
 The workflow builds the app with PyInstaller, runs `--selftest` on the built exe, builds the installer with Inno Setup and publishes `Deals-Setup.exe` with its `.sha256` to the release. `build_exe.bat` is only for local test builds.
 

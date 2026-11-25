@@ -157,7 +157,7 @@ def ensure_deps():
 ensure_deps()
 import engine as E  # noqa: E402
 
-if getattr(E, "ENGINE_VERSION", 0) < 63:
+if getattr(E, "ENGINE_VERSION", 0) < 64:
     _r = tk.Tk()
     _r.withdraw()
     messagebox.showerror("Deals", "engine.py is out of date.\n\nReplace it with the new engine.py from the "
@@ -1292,6 +1292,7 @@ class App(tk.Tk):
         self.tray, self._tray_told, self.tray_close = None, False, False
         self._testing_all, self._test_prog = False, None
         self._stream, self._stream_sig, self._dev_clicks, self._dev_t = False, None, 0, 0.0
+        self._digest_busy, self._ml_busy, self._ml_pending = False, False, []
         self._sgen, self._scancel = 0, None               # which search is current, and how to stop the one before
         self.progs = []                                   # running progress cards (so a hidden one can be brought back)
         self._err_count = 0
@@ -1557,7 +1558,7 @@ class App(tk.Tk):
                          ("add custom store...", lambda: self.add_store()), ("repair broken sources", self.run_repair),
                          ("update shop list", self.sync_shop_list), None,
                          ("reset built-in list", self.reset_stores)]),
-            ("Settings", [("alerts...", self.open_alerts), ("browser mode...", lambda: StoresDialog(self)),
+            ("Settings", [("alerts...", self.open_alerts), ("daily deals digest...", self.open_digest), ("browser mode...", lambda: StoresDialog(self)),
                           ("hidden sites...", self.open_hidden), ("cashback %...", self.open_cashback),
                           ("check all sources...", self.run_health), ("weekly source check on / off", self.toggle_health),
                           ("export Watchlist report...", self.export_report),
@@ -3051,20 +3052,61 @@ class App(tk.Tk):
                     style="ghost").pack(side="left")
 
     def give_feedback(self, o, verdict, row, holder=None):
-        E.set_feedback(E.db(), o.url, verdict, o.title)
-        if verdict == "yes":                                 # remembered for your taste, but off the page to cut clutter
-            try:
-                self.toast("Noted - we'll find more like this")
-            except Exception:  # noqa: BLE001
-                pass
-            holder = holder or getattr(row, "master", None)
-        if holder is not None and holder in self.pick_cells:
-            self.pick_cells.remove(holder)
-            holder.destroy()
+        removed = set(E.set_feedback(E.db(), o.url, verdict, o.title))
+        try:
+            self.toast(E.feedback_note(o.title, verdict))        # say what was learned, so the click visibly counts
+        except Exception:  # noqa: BLE001
+            pass
+        holder = holder or getattr(row, "master", None)
+        gone = [h for h in list(self.pick_cells) if h is holder or any(
+            isinstance(getattr(w, "o", None), E.Offer) and w.o.url in removed for w in h.winfo_children())]
+        for h in gone:
+            if h in self.pick_cells:
+                self.pick_cells.remove(h)
+            h.destroy()
+        if gone:
             cols, gap = self._pick_grid
             for i, h in enumerate(self.pick_cells):
                 r, c = divmod(i, cols)
                 h.grid(row=r, column=c, padx=gap, pady=5)
+        if verdict == "yes":
+            self.more_like(o.title)
+
+    def more_like(self, title):
+        """After Interested: go and look for similar discounted things right away (one at a time, in the background)."""
+        self._ml_pending.append(title)
+        if self._ml_busy or self.picking or self.searching:
+            return
+        self._ml_busy = True
+        con = E.db()
+        cfg = E.get_settings(con)
+        stores = E.active_stores(con, cfg.get("region") or self.region)
+        titles, self._ml_pending = self._ml_pending[-2:], []
+
+        def work():
+            n = 0
+            try:
+                for t in titles:
+                    n += E.more_like(t, stores, cfg)
+            except Exception:  # noqa: BLE001
+                log_error(traceback.format_exc())
+
+            def finish():
+                self._ml_busy = False
+                if n:
+                    self.set_status(f"found {n} more like that")
+                    if self.view == "foryou" and not self.picking and not self.searching:
+                        try:
+                            keep = self.foryou.canvas.yview()[0]
+                        except tk.TclError:
+                            keep = 0.0
+                        self.render_picks("foryou")
+                        self.after(60, lambda: self.foryou.canvas.yview_moveto(keep))
+                        self.toast(f"Found {n} more like that - they're at the top")
+                if self._ml_pending and not self.picking and not self.searching:
+                    self.more_like(self._ml_pending.pop())
+            self.q.put(finish)
+        threading.Thread(target=work, daemon=True).start()
 
     # ----------------------------------------------------------- thumbnails --
     def load_thumbs(self, urls):
@@ -3755,12 +3797,136 @@ class App(tk.Tk):
             else:
                 self.next_var.set(f"next check in {left // 60}m {left % 60:02d}s")
         self._ticks = getattr(self, "_ticks", 0) + 1
+        if self._ticks % 60 == 30:
+            try:
+                self.maybe_digest()
+            except Exception:  # noqa: BLE001
+                log_error(traceback.format_exc())
         if self._ticks % 300 == 0:
             try:
                 self.maybe_health()
             except Exception:  # noqa: BLE001
                 log_error(traceback.format_exc())
         self.after(1000, self.tick)
+
+    # ---------------------------------------------------- daily deals digest --
+    def maybe_digest(self, force=False):
+        """Once a day (if you opted in): look for fresh deals in the categories you chose and send them as one message."""
+        if self._digest_busy:
+            return
+        s = E.get_settings(E.db())
+        if not force and not E.digest_due(s):
+            return
+        if self.scanning or self.searching or self.picking or getattr(self, "_testing_all", False):
+            return                                             # wait until Deals is idle
+        self._digest_busy = True
+        stores = E.active_stores(E.db(), s.get("region") or self.region)
+        self.set_status("building your daily deals digest...")
+
+        def work():
+            res, err = None, ""
+            try:
+                res = E.run_digest(stores, s, force=force)
+            except Exception:  # noqa: BLE001
+                log_error(traceback.format_exc())
+                err = "the digest could not be built - see deals_error.log"
+
+            def finish():
+                self._digest_busy = False
+                if res:
+                    self.set_status(f"digest sent: {res['n']} deals")
+                    if s.get("popups") == "1" or force:
+                        self.show_digest(res)
+                else:
+                    self.set_status(err or ("no strong deals found in your categories today" if force else "ready"))
+                    if force:
+                        messagebox.showinfo("digest", err or "Nothing strongly discounted in those categories right now.")
+            self.q.put(finish)
+        threading.Thread(target=work, daemon=True).start()
+
+    def show_digest(self, res):
+        w = tk.Toplevel(self)
+        w.title("Daily deals digest")
+        w.attributes("-topmost", True)
+        w.resizable(False, False)
+        self.reg(w, "window")
+        f = self.frame(w)
+        f.pack(padx=16, pady=14)
+        self.label(f, res["subject"], font=self.f_bold, wraplength=440, justify="left").pack(anchor="w")
+        self.label(f, res["body"][:1400], "muted", font=self.f_small, wraplength=440, justify="left").pack(anchor="w", pady=(8, 0))
+        bar = self.frame(f)
+        bar.pack(anchor="e", pady=(12, 0))
+        self.button(bar, "close", w.destroy).pack(side="left", padx=(0, 6))
+        if res.get("url"):
+            self.button(bar, "open first", lambda: (self.open_url(res["url"]), w.destroy())).pack(side="left")
+
+    def open_digest(self):
+        s = E.get_settings(E.db())
+        sel = set(E.digest_cats(s))
+        win = tk.Toplevel(self)
+        win.title("Daily deals digest")
+        win.transient(self)
+        win.resizable(False, False)
+        self.reg(win, "window")
+        body = self.frame(win)
+        body.pack(padx=24, pady=18)
+        self.label(body, "Daily deals digest", font=self.f_big).pack(anchor="w")
+        self.label(body, "Once a day, Deals searches only the categories you pick below and sends the best few in each as one "
+                         "message (to your alert channels from Settings > alerts, and as a pop-up). Deals needs to be running "
+                         "- keep it in the tray. Off unless you turn it on.", "muted", font=self.f_small, wraplength=480,
+                   justify="left").pack(anchor="w", pady=(4, 12))
+        top = self.frame(body)
+        top.pack(anchor="w", fill="x")
+        on = self.switch(top, s.get("digest_on") == "1")
+        on.pack(side="left")
+        self.label(top, "Send me a daily digest").pack(side="left", padx=10)
+        hr = tk.StringVar(value=s.get("digest_hour", "8"))
+        self.entry(top, hr, width=4).pack(side="right")
+        self.label(top, "after hour (0-23)", "muted", font=self.f_small).pack(side="right", padx=8)
+        self.label(body, f"Pick up to {E.DIGEST_MAX_CATS} categories:", font=self.f_small_b).pack(anchor="w", pady=(14, 4))
+        grid = self.frame(body)
+        grid.pack(anchor="w")
+        count = self.label(body, "", "muted", font=self.f_small)
+        count.pack(anchor="w", pady=(6, 0))
+        sws = {}
+
+        def upd():
+            count.configure(text=f"{len(sel)} of {E.DIGEST_MAX_CATS} picked")
+
+        def flip(cat, v):
+            if v and len(sel) >= E.DIGEST_MAX_CATS:
+                sws[cat].set(False)
+                return self.toast(f"Up to {E.DIGEST_MAX_CATS} categories - switch another one off first")
+            (sel.add if v else sel.discard)(cat)
+            upd()
+        for i, cat in enumerate(E.DAILY_CATS):
+            cell = self.frame(grid)
+            cell.grid(row=i // 2, column=i % 2, sticky="w", padx=(0, 28), pady=3)
+            sws[cat] = self.switch(cell, cat in sel, lambda v, c=cat: flip(c, v))
+            sws[cat].pack(side="left")
+            self.label(cell, cat, font=self.f_small).pack(side="left", padx=8)
+        upd()
+
+        def save(close=True):
+            try:
+                h = str(max(0, min(23, int(float(hr.get())))))
+            except ValueError:
+                h = "8"
+            con = E.db()
+            E.set_setting(con, "digest_on", "1" if on.get() else "0")
+            E.set_setting(con, "digest_cats", json.dumps([c for c in E.DAILY_CATS if c in sel]))
+            E.set_setting(con, "digest_hour", h)
+            E.set_setting(con, "digest_sent", "")
+            self.set_status("daily digest " + ("on" if on.get() and sel else "off"))
+            if close:
+                win.destroy()
+        bar = self.frame(body)
+        bar.pack(fill="x", pady=(16, 0))
+        self.button(bar, "Send a test now", lambda: (save(False), self.maybe_digest(force=True)), style="ghost").pack(side="left")
+        self.button(bar, "cancel", win.destroy, style="ghost").pack(side="right")
+        self.button(bar, "save", save, style="solid").pack(side="right", padx=(0, 6))
+        win.update_idletasks()
+        win.geometry(f"+{self.winfo_rootx() + px(140)}+{self.winfo_rooty() + px(60)}")
 
     def show_deal(self, a):
         self.render_watch()

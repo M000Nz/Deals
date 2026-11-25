@@ -37,7 +37,7 @@ from urllib.parse import parse_qs, quote, quote_plus, unquote, urlencode, urljoi
 import requests
 from bs4 import BeautifulSoup
 
-ENGINE_VERSION = 63
+ENGINE_VERSION = 64
 GITHUB_REPO = "M000Nz/Deals"
 GITHUB_API = "https://api.github.com"
 FROZEN = bool(getattr(sys, "frozen", False))                  # True when running as the packaged Deals.exe
@@ -366,7 +366,7 @@ def select_stores(stores: list[dict], keywords: str, cfg: dict | None = None) ->
 
 DEFAULTS = {"region": "Australia", "interval": "60", "currency": "$", "popups": "1", "theme": "dark",
             "auto": "0", "hide_acc": "0", "sort": "Best match", "limited": "0", "browser": "1", "blocked": "ebay", "scope": "smart",
-            "health_auto": "1", "update_url": "https://raw.githubusercontent.com/M000Nz/Deals/main/Version.txt", "alert_mode": "instant", "quiet_on": "0", "quiet_start": "22", "quiet_end": "7", "summary_hour": "8", "show_codes": "1"}
+            "health_auto": "1", "update_url": "https://raw.githubusercontent.com/M000Nz/Deals/main/Version.txt", "alert_mode": "instant", "quiet_on": "0", "quiet_start": "22", "quiet_end": "7", "summary_hour": "8", "show_codes": "1", "digest_on": "0", "digest_hour": "8"}
 ALERT_MIN_SCORE = 50
 SECRET_KEYS = {"discord", "tg_token", "email_pass"}
 
@@ -416,6 +416,7 @@ _SCHEMA = (
             url TEXT PRIMARY KEY, store TEXT, title TEXT, price REAL, correct REAL, at REAL);
         CREATE TABLE IF NOT EXISTS feedback(
             url TEXT PRIMARY KEY, verdict TEXT NOT NULL, terms TEXT, title TEXT, at REAL);
+        CREATE TABLE IF NOT EXISTS foryou_seen(url TEXT PRIMARY KEY, at REAL);
         """
 )
 
@@ -3320,6 +3321,69 @@ def send_pending(con, s: dict, log=print, now: float | None = None) -> int:
 
 
 # --------------------------------------------------------------------------- #
+# Daily deals digest (opt in): fresh deals in the categories you picked, once a day
+# --------------------------------------------------------------------------- #
+DIGEST_MAX_CATS = 5
+
+
+def digest_cats(s: dict) -> list[str]:
+    try:
+        v = json.loads(s.get("digest_cats") or "[]")
+    except (ValueError, TypeError):
+        v = []
+    return [c for c in v if c in DAILY_CATS][:DIGEST_MAX_CATS]
+
+
+def digest_due(s: dict, now: float | None = None) -> bool:
+    """True once a day, after the chosen hour, when the digest is switched on and has categories."""
+    if s.get("digest_on") != "1" or not digest_cats(s) or in_quiet(s, now):
+        return False
+    lt = time.localtime(now or time.time())
+    try:
+        hour = int(float(s.get("digest_hour", 8)))
+    except ValueError:
+        hour = 8
+    return lt.tm_hour >= hour and s.get("digest_sent") != time.strftime("%Y-%m-%d", lt)
+
+
+def run_digest(stores: list[dict], cfg: dict | None = None, log=print, cancel=None, force: bool = False) -> dict | None:
+    """Search ONLY the categories you chose, then send the best few in each as one message.
+    Returns {'subject','body','url','n'} (also sent to your alert channels), or None when nothing was found."""
+    con = db()
+    s = get_settings(con)
+    cats = digest_cats(s)
+    if not cats or not stores:
+        return None
+    if not force:
+        if not digest_due(s):
+            return None
+        set_setting(con, "digest_sent", time.strftime("%Y-%m-%d"))          # one attempt a day, whatever the outcome
+    sym = s.get("currency", "$")
+    t0, sections, first_url, total = time.time(), [], None, 0
+    for cat in cats:
+        if cancel is not None and cancel.is_set():
+            break
+        try:
+            refresh_daily(stores, cfg, log=log, cancel=cancel, category=cat)
+        except Exception as ex:  # noqa: BLE001
+            log(f"digest: {cat} failed: {ex}")
+            continue
+        rows = [r for r in con.execute("SELECT title,price,store,pct,url,terms FROM picks WHERE kind='daily' AND found_at>=? "
+                                       "ORDER BY pct DESC", (t0,)) if pick_category(r["terms"], r["title"]) == cat][:3]
+        if rows:
+            first_url = first_url or rows[0]["url"]
+            total += len(rows)
+            sections.append(cat + "\n" + "\n".join(
+                f"- {r['title'][:70]}: {money(sym, r['price'])} at {r['store']} ({r['pct']:.0f}% off)\n  {r['url']}" for r in rows))
+    if not sections:
+        return None
+    subject = f"Deals digest: {total} deal{'s' if total != 1 else ''} in " + ", ".join(c for c in cats if any(x.startswith(c + "\n") for x in sections))
+    body = "\n\n".join(sections)
+    notify(s, subject[:120], body, first_url, log)
+    return {"subject": subject[:120], "body": body, "url": first_url, "n": total}
+
+
+# --------------------------------------------------------------------------- #
 # Deal score: one 0-100 number that says how good a listing really is
 # --------------------------------------------------------------------------- #
 def deal_score(o: Offer, prev: float | None = None, st: dict | None = None, info: dict | None = None,
@@ -3719,14 +3783,47 @@ def _brand_words(text: str) -> list[str]:
     return [norm(t) for t in _tokens(text) if _is_brand(t)]
 
 
-def set_feedback(con, o_url: str, verdict: str, title: str):
-    """verdict: 'yes' (interested) or 'no' (not interested)."""
+def kind_key(title: str) -> tuple[str, str]:
+    """(brand, product type) of a title, e.g. ('sony', 'headphones'). Either may be ''."""
+    return ((_brand_words(title) or [""])[0], (_type_words(title) or [""])[0])
+
+
+def set_feedback(con, o_url: str, verdict: str, title: str) -> list[str]:
+    """verdict: 'yes' (interested) or 'no' (not interested). 'No' also clears the suggestions that are the same kind of
+    thing (same brand and type); returns the addresses removed from the page."""
     terms = " ".join(_type_words(title)[:2] + _brand_words(title)[:1])
     con.execute("INSERT OR REPLACE INTO feedback(url,verdict,terms,title,at) VALUES(?,?,?,?,?)",
                 (o_url, verdict, terms, title, time.time()))
+    removed: list[str] = []
     if verdict == "no":
-        con.execute("DELETE FROM picks WHERE kind='foryou' AND url=?", (o_url,))
+        key = kind_key(title)
+        for r in con.execute("SELECT url, title FROM picks WHERE kind='foryou'").fetchall():
+            if r["url"] == o_url or (key[0] and key[1] and kind_key(r["title"]) == key):
+                removed.append(r["url"])
+        for u in removed:
+            con.execute("DELETE FROM picks WHERE kind='foryou' AND url=?", (u,))
     con.commit()
+    return removed
+
+
+def feedback_note(title: str, verdict: str) -> str:
+    """What the app took from a click, in words ('Noted - looking for more Sony headphones')."""
+    b, t = kind_key(title)
+    what = " ".join(x for x in (b.title(), t) if x) or "things like that"
+    return f"Noted - looking for more {what}" if verdict == "yes" else f"Got it - fewer {t or what} like that"
+
+
+def liked_queries(con, limit: int = 8) -> list[str]:
+    """Searches built from what you pressed Interested on (newest first): brand + type, then the type alone."""
+    out: list[str] = []
+    for r in con.execute("SELECT title FROM feedback WHERE verdict='yes' ORDER BY at DESC LIMIT 30"):
+        b, t = kind_key(r["title"] or "")
+        for q in ([f"{b} {t}"] if b and t else []) + ([t] if t else []):
+            if q and q not in out:
+                out.append(q)
+        if len(out) >= limit:
+            break
+    return out[:limit]
 
 
 def _taste(con) -> dict:
@@ -3755,6 +3852,7 @@ def reset_foryou(con):
     """Forget everything For you has learned (likes, dislikes, suggestions). Until you press Interested on something or add a
     new watchlist item, it suggests random popular things."""
     con.execute("DELETE FROM feedback")
+    con.execute("DELETE FROM foryou_seen")
     con.execute("DELETE FROM picks WHERE kind='foryou'")
     wid = con.execute("SELECT COALESCE(MAX(id),0) FROM watchlist").fetchone()[0]
     set_setting(con, "foryou_rot", "0")
@@ -3798,7 +3896,7 @@ def interest_queries(con) -> list[str]:
     out = []
     for q in qs:
         words = q.split()
-        if any(taste["no_types"].get(w, 0) >= 3 and not taste["like_types"].get(w) for w in words):
+        if any(taste["no_types"].get(w, 0) >= 2 and not taste["like_types"].get(w) for w in words):
             continue                                   # you keep saying no to this kind of thing
         if q not in out:
             out.append(q)
@@ -3846,12 +3944,15 @@ def _foryou_take(con, qs: list[str], off: int, st: dict) -> list[str]:
     else:
         set_setting(con, "foryou_idle", str(idle))
     n_out = 2 if len(qs) >= 4 else 1
-    main = [qs[(off + i) % len(qs)] for i in range(min(6 - n_out, len(qs)))]
-    return main + _explore_topics(con, qs + main, n_out)
+    liked = liked_queries(con)
+    liked_sel = [liked[(off + i) % len(liked)] for i in range(min(3, len(liked)))]      # what you said yes to gets half the slots
+    base = [q for q in qs if q not in liked_sel]
+    main = [base[(off + i) % len(base)] for i in range(min(6 - n_out - len(liked_sel), len(base)))] if base else []
+    return liked_sel + main + _explore_topics(con, qs + liked_sel + main, n_out)
 
 
 def refresh_foryou(stores: list[dict], cfg: dict | None = None, progress=None, log=print, cancel=None) -> tuple[int, str]:
-    """Look for deals similar to what you follow. Adds a few new suggestions each time."""
+    """Look for deals similar to what you follow and like. Each press replaces the page with a fresh set."""
     con = db()
     cfg = dict(cfg or {})
     qs = interest_queries(con)
@@ -3865,12 +3966,40 @@ def refresh_foryou(stores: list[dict], cfg: dict | None = None, progress=None, l
     res = find_offers_many([(q, q) for q in take], stores, cfg, progress=progress, deadline=90.0)
     if _cancelled(cfg):
         return 0, ""
+    cands = _foryou_candidates(con, res, set(liked_queries(con)))
+    added, per_q, chosen = 0, {}, []
+    for _, o, pct, q in cands:
+        if per_q.get(q, 0) >= max(4, FORYOU_ADD // max(1, len(take)) + 2):
+            continue
+        per_q[q] = per_q.get(q, 0) + 1
+        chosen.append((o, pct, q))
+        if len(chosen) >= FORYOU_ADD:
+            break
+    if chosen:                                              # a fresh page: what was on it before has had its chance
+        now = time.time()
+        for r in con.execute("SELECT url FROM picks WHERE kind='foryou'").fetchall():
+            con.execute("INSERT OR REPLACE INTO foryou_seen(url, at) VALUES(?,?)", (r["url"], now))
+        con.execute("DELETE FROM picks WHERE kind='foryou'")
+        for o, pct, q in chosen:
+            _store_pick(con, "foryou", o, pct, q)
+        added = len(chosen)
+    con.execute("DELETE FROM foryou_seen WHERE at < ?", (time.time() - 45 * 86400,))
+    con.commit()
+    return added, ("" if added else "Nothing new and well-discounted today. Check back tomorrow.")
+
+
+def _foryou_candidates(con, res: dict, liked_qs: set) -> list:
+    """Scored suggestions from search results: well discounted, not seen before, matching what you like and
+    leaving out the kinds of thing you said no to."""
     taste = _taste(con)
     seen_fb = {r["url"] for r in con.execute("SELECT url FROM feedback")}
+    seen_fb |= {r["url"] for r in con.execute("SELECT url FROM foryou_seen")}
     have = {r["url"] for r in con.execute("SELECT url FROM picks WHERE kind='foryou'")}
+    no_keys = {kind_key(r["title"] or "") for r in con.execute("SELECT title FROM feedback WHERE verdict='no'")}
+    bad_types = {w for w, c in taste["no_types"].items() if c >= 2 and not taste["like_types"].get(w)}
     watch_models = [[norm(t) for t in _tokens(r["keywords"]) if any(c.isdigit() for c in t)]
                     for r in con.execute("SELECT keywords FROM watchlist")]
-    cands: list[tuple[float, Offer, float, str]] = []
+    cands: list = []
     med: dict[str, float] = {}
     for q, (ranked, _rep) in res.items():
         prev = last_prices(con, [o.url for o in ranked])
@@ -3889,24 +4018,39 @@ def refresh_foryou(stores: list[dict], cfg: dict | None = None, progress=None, l
             nt = norm(o.title)
             if any(m and all(x in nt for x in m) for m in watch_models):
                 continue                               # that's one you're already watching
-            br = (_brand_words(o.title) or [""])[0]
+            br, ty = kind_key(o.title)
+            if (br, ty) in no_keys and br and ty:
+                continue                               # you said no to this brand's version of this thing
+            if set(_type_words(o.title)[:2]) & bad_types:
+                continue
             if taste["no_brands"].get(br, 0) >= 2 and not taste["like_brands"].get(br):
                 continue
-            bonus = 10 * min(2, taste["like_brands"].get(br, 0)) + (4 if o.source == "ozb" else 0)
+            liked_type = any(w in taste["like_types"] for w in _type_words(o.title)[:2])
+            bonus = (10 * min(2, taste["like_brands"].get(br, 0)) + (8 if liked_type else 0)
+                     + (6 if q in liked_qs else 0) + (4 if o.source == "ozb" else 0))
             cands.append((pct + bonus, o, pct, q))
     cands.sort(key=lambda c: c[0], reverse=True)
-    added, per_q = 0, {}
-    for _, o, pct, q in cands:
-        if per_q.get(q, 0) >= max(4, FORYOU_ADD // max(1, len(take)) + 2):
-            continue
-        per_q[q] = per_q.get(q, 0) + 1
-        _store_pick(con, "foryou", o, pct, q)
-        added += 1
-        if added >= FORYOU_ADD:
-            break
-    con.execute("DELETE FROM picks WHERE kind='foryou' AND found_at < ?", (time.time() - 21 * 86400,))
+    return cands
+
+
+def more_like(title: str, stores: list[dict], cfg: dict | None = None, cancel=None, add: int = 3) -> int:
+    """Right after you press Interested: look straight away for similar discounted things and put them on the page."""
+    con = db()
+    b, t = kind_key(title)
+    q = " ".join(x for x in (b, t) if x) or " ".join(_tokens(title)[:3])
+    if not q:
+        return 0
+    cfg = dict(cfg or {}, _cancel=cancel)
+    res = find_offers_many([(q, q)], stores, cfg, deadline=30.0)
+    if _cancelled(cfg):
+        return 0
+    cands = _foryou_candidates(con, res, {q})
+    n = 0
+    for _, o, pct, qq in cands[:add]:
+        _store_pick(con, "foryou", o, pct, qq)
+        n += 1
     con.commit()
-    return added, ("" if added else "Nothing new and well-discounted today. Check back tomorrow.")
+    return n
 
 
 def keywords_from_title(title: str) -> str:

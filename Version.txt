@@ -1,5 +1,8 @@
-63
+64
 https://github.com/M000Nz/Deals
+note: For you: Find more now replaces the whole page with fresh suggestions (nothing piles up), and never repeats ones you were already shown
+note: For you: Interested and Not interested now visibly work - half of each search round follows what you liked, Interested looks for similar deals straight away, and Not interested also clears the same brand and type
+note: New opt-in daily deals digest (Settings > daily deals digest): pick up to 5 categories and get the best fresh deals in just those, once a day
 note: Find more / Refresh / changing the Daily deals category now takes over straight away - it stops whatever search or scan is still running
 note: Result cards show 'Seen as low as $X (3 weeks ago)' for products Deals has priced before, even ones you don't follow
 note: Starting a new search now stops the one still running, so the search you want is never held up
