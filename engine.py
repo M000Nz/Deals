@@ -37,7 +37,7 @@ from urllib.parse import parse_qs, quote, quote_plus, unquote, urlencode, urljoi
 import requests
 from bs4 import BeautifulSoup
 
-ENGINE_VERSION = 98
+ENGINE_VERSION = 99
 GITHUB_REPO = "M000Nz/Deals"
 GITHUB_API = "https://api.github.com"
 FROZEN = bool(getattr(sys, "frozen", False))                  # True when running as the packaged Deals.exe
@@ -329,6 +329,11 @@ CATEGORY_WORDS = {
     "pets": "dog cat puppy kitten pet food leash collar litter aquarium fish bird",
     "beauty": "perfume fragrance makeup skincare serum moisturiser shampoo conditioner hairdryer straightener vitamins "
               "supplement razor shaver toothbrush sunscreen lipstick foundation cologne",
+    "fragrance": "perfume perfumes fragrance cologne parfum eau edp edt aftershave sauvage aventus creed lattafa armaf "
+                 "tomford davidoff azzaro rabanne gaultier herrera diptyque jomalone",
+    "luxury": "luxury designer gucci prada chanel dior louboutin hermes louis vuitton cartier rolex omega tiffany burberry "
+              "versace fendi balenciaga givenchy ysl saint laurent bulgari tagheuer breitling longines tudor pandora "
+              "swarovski coach montblanc handbag handbags jewellery jewelry necklace bracelet earrings pearl diamond",
     "auto": "tyre tyres tire car dashcam battery oil wiper seat cover roofrack jumpstarter",
     "books": "book books novel textbook cookbook biography manga",
     "grocery": "coffee tea chocolate wine beer whisky gin vodka snacks nappies milk cereal pasta",
@@ -1316,7 +1321,7 @@ def make_soup(page: str) -> BeautifulSoup:
 
 USED_ONLY_STORES = {"Cash Converters"}          # everything they sell is second-hand
 USED_RE = re.compile(r"(?i)\b(?:refurb(?:ished)?|pre-?owned|second[- ]?hand|used|open[- ]?box|renewed|ex[- ]?demo|ex[- ]?display|"
-                     r"reconditioned|grey import|gray import|parallel import|international (?:version|model|stock))\b")
+                     r"reconditioned|tester|unboxed|grey import|gray import|parallel import|international (?:version|model|stock))\b")
 OOS_RE = re.compile(r"(?i)out of stock|sold out|currently unavailable|temporarily unavailable|notify me when|back[- ]?order|"
                     r"coming soon|no longer available|discontinued|unavailable online")
 
@@ -1908,7 +1913,7 @@ AMAZON_STATS: dict = {}
 
 # Shops built on Shopify draw their search results with JavaScript, so the page looks empty. Shopify also gives every
 # shop two plain data feeds (search suggestions and the full product list) - read those instead.
-SHOPIFY_HOSTS = {"sihoo.com.au"}
+SHOPIFY_HOSTS = {"sihoo.com.au", "hardybrothers.com.au", "myperfumeshop.com.au"}
 
 
 def _shopify_offers(store: dict, base: str, query: str) -> list[Offer]:
@@ -2190,7 +2195,8 @@ def status_mark(status: str) -> str:
 # --------------------------------------------------------------------------- #
 STOP = {"the", "a", "an", "and", "or", "of", "with", "for", "new", "in", "to", "on"}
 STRONG_ACC = {"band", "bands", "strap", "straps", "wristband", "wristbands", "protector", "protectors",
-              "replacement", "refill", "refills", "compatible", "lanyard", "buckle", "tempered"}
+              "replacement", "refill", "refills", "compatible", "lanyard", "buckle", "tempered",
+              "sample", "samples", "decant", "vial", "atomiser", "atomizer", "dupe", "replica"}
 WEAK_ACC = {"case", "cases", "cover", "covers", "skin", "sleeve", "pouch", "stand", "mount", "holder",
             "dock", "cable", "cord", "charger", "adapter", "film", "clip", "box", "winder", "bracket",
             "tray", "bag"}
@@ -3025,7 +3031,7 @@ def find_offers(keywords: str, stores: list[dict], cfg: dict | None = None, work
 
 SAMPLE_QUERY = {"tech": "laptop", "gaming": "controller", "home": "kettle", "diy": "drill", "garden": "mower",
                 "fashion": "shoes", "sports": "running shoes", "outdoor": "tent", "baby": "stroller", "toys": "lego",
-                "pets": "dog food", "beauty": "shampoo", "auto": "wiper blades", "books": "cookbook",
+                "pets": "dog food", "beauty": "shampoo", "fragrance": "perfume", "luxury": "handbag", "auto": "wiper blades", "books": "cookbook",
                 "grocery": "coffee", "office": "pen", "music": "guitar"}
 
 
@@ -4140,6 +4146,11 @@ DAILY_CATS = {
     "Outdoor & camping": ["camping tent", "sleeping bag", "esky", "camping stove", "swag", "hiking boots", "kayak",
                           "paddle board", "fishing rod", "fishing reel", "4wd", "camp chair", "portable fridge"],
     "Fashion": ["sneakers", "jacket", "jeans", "backpack", "sunglasses", "boots", "hoodie", "handbag", "watch", "wallet"],
+    "Luxury": ["gucci bag", "louis vuitton", "chanel", "prada", "cartier", "rolex", "omega watch", "tag heuer", "pandora",
+               "swarovski", "designer handbag", "designer sunglasses", "michael kors", "coach bag"],
+    "Fragrance": ["dior sauvage", "chanel perfume", "ysl perfume", "versace perfume", "creed aventus", "tom ford perfume",
+                  "paco rabanne", "jean paul gaultier", "hugo boss fragrance", "calvin klein fragrance", "womens perfume",
+                  "mens cologne", "perfume gift set"],
     "Beauty & health": ["perfume", "hair dryer", "hair straightener", "electric toothbrush", "skincare", "electric shaver",
                         "vitamins", "protein powder"],
     "Baby & kids": ["pram", "car seat", "cot", "high chair", "baby monitor", "trampoline", "kids bike", "bassinet"],
