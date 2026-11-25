@@ -37,7 +37,7 @@ from urllib.parse import parse_qs, quote, quote_plus, unquote, urlencode, urljoi
 import requests
 from bs4 import BeautifulSoup
 
-ENGINE_VERSION = 83
+ENGINE_VERSION = 84
 GITHUB_REPO = "M000Nz/Deals"
 GITHUB_API = "https://api.github.com"
 FROZEN = bool(getattr(sys, "frozen", False))                  # True when running as the packaged Deals.exe
@@ -2039,6 +2039,7 @@ def _scan_one(store: dict, keywords: str, cfg: dict | None = None):
     if bad and now - bad[0] < FAIL_TTL:
         return store, [], bad[1]
     err, offers = None, []
+    t_start = time.time()
     with _host_sem(store):
         with _HOST_LOCK:                                  # it may have failed while we waited our turn
             bad = _SITE_FAIL.get(host)
@@ -2059,6 +2060,7 @@ def _scan_one(store: dict, keywords: str, cfg: dict | None = None):
                 err = e.kind
             except Exception:  # noqa: BLE001
                 err = "error"
+    store["_ms"] = int((time.time() - t_start) * 1000)
     with _HOST_LOCK:
         if len(_SCAN_CACHE) > 400:
             _SCAN_CACHE.clear()
@@ -2581,12 +2583,15 @@ def _find_pass(queries: list[tuple], stores: list[dict], cfg: dict | None = None
     ex = ThreadPoolExecutor(max_workers=max(1, min(POOL_WORKERS, total)))
     exb = ThreadPoolExecutor(max_workers=4)             # shops that need the hidden browser get their own lane, so they
     use_b = browser_wanted(cfg)                         # (Amazon, Big W, Officeworks...) start at once and don't wait behind every plain shop
-    futs = {}
+    futs, bfuts = {}, set()
     for k, kw in queries:
         cats = detect_categories(kw)
         for st in sorted(picked[k], key=lambda s: _scan_order(s, cats)):
-            pool = exb if (use_b and st.get("use_browser")) else ex
-            futs[pool.submit(_scan_one, dict(st), kw, cfg)] = (k, st)
+            browsery = use_b and st.get("use_browser")
+            fut = (exb if browsery else ex).submit(_scan_one, dict(st), kw, cfg)
+            futs[fut] = (k, st)
+            if browsery:
+                bfuts.add(fut)
     done, t0, cut, pending = 0, time.time(), deadline, set(futs)
     last_partial, sent = 0.0, None
     try:
@@ -2613,8 +2618,10 @@ def _find_pass(queries: list[tuple], stores: list[dict], cfg: dict | None = None
                 except Exception:  # noqa: BLE001
                     pass
             el = time.time() - t0
-            if cut == deadline and total and done >= 0.85 * total and el >= 5:
-                cut = min(deadline, el + max(3.0, el * 0.4))      # most stores are in: don't wait long for the stragglers
+            if cut == deadline and total and done >= 0.85 * total and el >= 5 and (el >= 30 or not (pending & bfuts)):
+                # most stores are in: don't wait long for the stragglers - but browser shops (Amazon...) are slow by
+                # nature, so they get the full time unless it is already well over half a minute
+                cut = min(deadline, el + max(3.0, el * 0.4))
     finally:
         for fut, (k, st) in futs.items():
             if not fut.done():
@@ -2656,7 +2663,7 @@ def _find_pass(queries: list[tuple], stores: list[dict], cfg: dict | None = None
             pass
         report = Report({"id": s["id"], "name": s["name"],
                          "status": status_text(len(offs), err, bool(s.get("_browser_used"))),
-                         "raw": len(offs), "err": err, "sample": [o.title for o in offs[:2]]}
+                         "raw": len(offs), "err": err, "sample": [o.title for o in offs[:2]], "ms": s.get("_ms", 0)}
                         for s, offs, err in results[k])
         report.extend({"id": st["id"], "name": st["name"], "status": "Too slow - skipped this time",
                        "raw": 0, "err": "timeout"} for st in late[k])
@@ -2698,7 +2705,8 @@ def _note_search(queries: list[tuple], out: dict) -> None:
             return
         k, kw = queries[0]
         ranked, rep = out[k]
-        lines = [f"Search: {kw}", time.strftime("%Y-%m-%d %H:%M:%S"), ""]
+        dev = get_settings(db()).get("dev_mode", "0") == "1"          # source tags, timings and re-check notes are developer-only
+        lines = [f"Search: {kw}", time.strftime("%Y-%m-%d %H:%M:%S") + (f"   (Deals engine v{ENGINE_VERSION})" if dev else ""), ""]
         raw = sum(r.get("raw", 0) for r in rep)
         rel = sum(1 for o in ranked if o.score >= 30)
         lines.append(f"{len(rep)} shops searched, {raw} listings came back, {len(ranked)} kept, {rel} closely match.")
@@ -2707,13 +2715,13 @@ def _note_search(queries: list[tuple], out: dict) -> None:
                      f"{rep.timed_out} too slow." + ("  Widened to every shop." if rep.widened else ""))
         lines += ["", "SHOPS (listings returned)"]
         for r in sorted(rep, key=lambda r: (-r.get("raw", 0), r["name"])):
-            lines.append(f"- {r['name']}: {r.get('raw', 0)}  {r.get('status', '')}")
+            ms = r.get("ms") or 0
+            lines.append(f"- {r['name']}: {r.get('raw', 0)}  {r.get('status', '')}" + (f"  [{ms / 1000:.1f}s]" if ms and dev else ""))
         if rel < 3:                                    # thin result: show what the shops actually sent back
             lines += ["", "WHAT THE SHOPS SENT BACK (first two listings of each)"]
             for r in sorted(rep, key=lambda r: -r.get("raw", 0))[:25]:
                 for t in r.get("sample") or []:
                     lines.append(f"- {r['name']}: {t[:90]}")
-        dev = get_settings(db()).get("dev_mode", "0") == "1"          # source tags and re-check notes are developer-only
         lines += ["", "TOP RESULTS (score, price, shop" + (" [where it came from]" if dev else "") + ", title, crossed-out price)"]
         for o in ranked[:25]:
             src = {"store": "shop's own search", "staticice": "StaticICE", "ozb": "OzBargain"}.get(o.source, o.source)
