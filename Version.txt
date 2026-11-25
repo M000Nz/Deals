@@ -1,5 +1,6 @@
-94
+95
 https://github.com/M000Nz/Deals
+note: Watchlist safeguard: a listing priced far below the item's usual price with no real 'was' price (e.g. a $35 strap for a $1,100 watch) is no longer treated as the product, and such points already in the price history are cleared on the next check
 note: Watchlist: the low/high, usual price and advice text now lines up at the same spot in every row
 note: Second pass now retries general shops first (Officeworks, Spotlight, home and DIY shops...) and leaves specialist shops (fashion, beauty, music, wine...) to the end, so the shops most likely to stock an unusual product get their second go
 note: A large 'Still searching' banner now sits at the top of the results (with a live count and progress bar) while shops are still answering, and again while slow shops get their second go

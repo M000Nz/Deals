@@ -37,7 +37,7 @@ from urllib.parse import parse_qs, quote, quote_plus, unquote, urlencode, urljoi
 import requests
 from bs4 import BeautifulSoup
 
-ENGINE_VERSION = 94
+ENGINE_VERSION = 95
 GITHUB_REPO = "M000Nz/Deals"
 GITHUB_API = "https://api.github.com"
 FROZEN = bool(getattr(sys, "frozen", False))                  # True when running as the packaged Deals.exe
@@ -3196,6 +3196,23 @@ def already_alerted(con, item_id, url, price) -> bool:
     return bool(row and price >= row["price"] * 0.999 and time.time() - row["sent_at"] < 7 * 86400)
 
 
+LOW_RATIO = 0.3     # a listing under this share of the item's usual price, with no real 'was' price, is not the same product
+
+
+def usual_ref(con, item_id: int) -> float | None:
+    """What this watchlist item normally costs: the shops' usual price, or failing that the middle of its own history."""
+    reg = regular_price(con, item_id)
+    if reg:
+        return reg[0]
+    hist = sorted(h["price"] for h in price_history(con, item_id))
+    return hist[len(hist) // 2] if len(hist) >= 3 else None
+
+
+def implausibly_low(o: Offer, ref: float | None) -> bool:
+    """A $35 listing for a $1,100 watch is a strap or a film, not a 97% sale. A real markdown shows a crossed-out price."""
+    return bool(ref) and o.price < LOW_RATIO * ref and not (o.was_price and o.was_price >= 0.6 * ref)
+
+
 def run_check(log=print, on_alert=None, progress=None, only_id: int | None = None) -> int:
     """Check every watchlist item (or just `only_id`, even if paused) across all active stores. Returns alerts sent."""
     con = db()
@@ -3223,6 +3240,17 @@ def run_check(log=print, on_alert=None, progress=None, only_id: int | None = Non
         skip = [w.strip().lower() for w in (item["ignore_stores"] or "").split(",") if w.strip()]
         offers = sorted((o for o in ranked if o.score >= ALERT_MIN_SCORE and not o.accessory and not o.used
                          and not any(w in o.store.lower() for w in skip)), key=lambda o: o.price)
+        ref = usual_ref(con, item["id"])
+        if ref:
+            low = [o for o in offers if implausibly_low(o, ref)]
+            if low:
+                offers = [o for o in offers if o not in low]
+                log(f"{item['keywords']}: ignored {len(low)} listing(s) far below the usual price (probably accessories)")
+            try:                                          # and clear any such rows an earlier check already saved
+                con.execute("DELETE FROM prices WHERE item_id=? AND price<? AND (reg IS NULL OR reg<?)",
+                            (item["id"], LOW_RATIO * ref, 0.6 * ref))
+            except Exception:  # noqa: BLE001
+                pass
         only_at = (item["stock_store"] or "").strip().lower()
         stock_now = [o for o in offers if not o.oos and (item["max_price"] is None or o.price <= item["max_price"])
                      and (not only_at or only_at in o.store.lower())]
