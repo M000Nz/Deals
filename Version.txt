@@ -1,5 +1,6 @@
-95
+96
 https://github.com/M000Nz/Deals
+note: Search matching fix: short words like 'Pro', 'Max' or 'Air' no longer match the start of longer words ('Pro' matched 'Protective', so a Garmin Striker sun cover showed up for 'Garmin epix Pro')
 note: Watchlist safeguard: a listing priced far below the item's usual price with no real 'was' price (e.g. a $35 strap for a $1,100 watch) is no longer treated as the product, and such points already in the price history are cleared on the next check
 note: Watchlist: the low/high, usual price and advice text now lines up at the same spot in every row
 note: Second pass now retries general shops first (Officeworks, Spotlight, home and DIY shops...) and leaves specialist shops (fashion, beauty, music, wine...) to the end, so the shops most likely to stock an unusual product get their second go

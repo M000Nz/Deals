@@ -37,7 +37,7 @@ from urllib.parse import parse_qs, quote, quote_plus, unquote, urlencode, urljoi
 import requests
 from bs4 import BeautifulSoup
 
-ENGINE_VERSION = 95
+ENGINE_VERSION = 96
 GITHUB_REPO = "M000Nz/Deals"
 GITHUB_API = "https://api.github.com"
 FROZEN = bool(getattr(sys, "frozen", False))                  # True when running as the packaged Deals.exe
@@ -2203,8 +2203,8 @@ def _term_index(term: str, toks: list[str]) -> int:
             return i
         if not digits and t in ("smart" + nt, "wrist" + nt):   # smartwatch, wristwatch, smartphone
             return i
-        if not digits and len(nt) >= 3 and t.startswith(nt):
-            return i
+        if not digits and len(nt) >= 3 and t.startswith(nt) and (len(nt) >= 5 or len(t) - len(nt) <= 2):
+            return i                     # a short word ('pro', 'max', 'air') only matches itself + a plural, not 'protective' / 'airpods'
         if not digits and len(t) >= 3 and nt.startswith(t) and len(nt) - len(t) <= 2:
             return i
     for i in range(len(toks)):           # 'wh-1000xm5' -> tokens 'wh' + '1000xm5'
