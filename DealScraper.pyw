@@ -157,7 +157,7 @@ def ensure_deps():
 ensure_deps()
 import engine as E  # noqa: E402
 
-if getattr(E, "ENGINE_VERSION", 0) < 62:
+if getattr(E, "ENGINE_VERSION", 0) < 63:
     _r = tk.Tk()
     _r.withdraw()
     messagebox.showerror("Deals", "engine.py is out of date.\n\nReplace it with the new engine.py from the "
@@ -873,6 +873,8 @@ class Card(tk.Canvas):
         self.nl = 4                                                    # info lines under the price
         self.review = app.review_line(o)
         self.hv = app.hist_verdict(o)
+        self.low = wrap_lines(E.low_line(o, app.hist.get(o.url), sym), f["small"], app.cw - 2 * px(12), 1)[0] \
+            if getattr(app, "hist", None) else ""
         self.meta_y = (0, 0)
         self.tip_kind = None
         self.star_box = (0, 0, 0, 0)
@@ -1072,6 +1074,8 @@ class Card(tk.Canvas):
                 cand.append((1, 1.5, f"Deal score {sc}  \u00b7  {lab}", f["small_b"],
                              P["accent"] if sc >= 55 else P["fg"] if sc >= 35 else P["muted"]))
         cand.append((2, 2, self.meta, f["small"], P["fg"] if o.others else P["muted"]))
+        if self.low:
+            cand.append((2, 2.5, self.low, f["small"], P["muted"]))
         if o.coupon and app.show_codes:
             cm = f"Code {o.coupon}" + (f"  \u00b7  ends {time.strftime('%d %b', time.localtime(o.expires))}" if o.expires else "")
             cand.append((0, 0.8, wrap_lines(cm, f["small_b"], app.cw - 2 * px(12), 1)[0], f["small_b"], P["accent"]))
@@ -2891,9 +2895,10 @@ class App(tk.Tk):
         E.set_setting(E.db(), "daily_cat", v)
         self.daily_shuffle = None
         have = len(E.pick_offers(E.db(), "daily", category=v))
-        if v != "All" and have < 6 and not self.picking and not self.searching:
+        if v != "All" and have < 6:
             self.refresh_picks("daily")
         else:
+            self.stop_picks()
             self.render_picks("daily")
 
     def pick_title(self, kind):
@@ -2901,9 +2906,19 @@ class App(tk.Tk):
             return f"Finding the best {self.daily_cat} deals..."
         return ("Finding today's biggest discounts..." if kind == "daily" else "Looking for deals you might like...")
 
+    def cancel_running(self):
+        """The latest thing the person asks for wins: stop a running Daily deals / For you scan or search."""
+        self.stop_picks()
+        if self.searching:
+            if self._scancel is not None:
+                self._scancel.set()
+            self._sgen += 1
+            self.searching, self._stream = False, False
+            self.hide_loading()
+
     def refresh_picks(self, kind):
         if self.picking or self.searching:
-            return
+            self.cancel_running()
         if kind == "daily":
             self.daily_shuffle = None
         con = E.db()

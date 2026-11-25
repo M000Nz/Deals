@@ -37,7 +37,7 @@ from urllib.parse import parse_qs, quote, quote_plus, unquote, urlencode, urljoi
 import requests
 from bs4 import BeautifulSoup
 
-ENGINE_VERSION = 62
+ENGINE_VERSION = 63
 GITHUB_REPO = "M000Nz/Deals"
 GITHUB_API = "https://api.github.com"
 FROZEN = bool(getattr(sys, "frozen", False))                  # True when running as the packaged Deals.exe
@@ -4199,9 +4199,28 @@ def history_stats(con, urls, days: int = 180) -> dict:
         for u, lst in rows.items():
             ps = sorted(p for p, _ in lst)
             ts = [t for _, t in lst]
-            out[u] = {"min": ps[0], "max": ps[-1], "n": len(lst), "span": (max(ts) - min(ts)) / 86400,
+            min_at = max(t for p, t in lst if p == ps[0])
+            out[u] = {"min": ps[0], "min_at": min_at, "max": ps[-1], "n": len(lst), "span": (max(ts) - min(ts)) / 86400,
                       "median": ps[len(ps) // 2], "series": [p for p, _ in sorted(lst, key=lambda x: x[1])][-14:]}
     return out
+
+
+def ago_text(ts: float, now: float | None = None) -> str:
+    d = ((now or time.time()) - ts) / 86400
+    if d < 1:
+        return "today"
+    if d < 14:
+        return f"{int(d)} day{'s' if int(d) != 1 else ''} ago"
+    if d < 60:
+        return f"{int(d // 7)} weeks ago"
+    return f"{int(d // 30)} months ago"
+
+
+def low_line(o: Offer, st: dict | None, sym: str = "$") -> str:
+    """'Seen as low as $389 (3 weeks ago)' for a page whose price we have recorded before, when it was lower then."""
+    if not st or o.source == "ozb" or st["n"] < 3 or st["span"] < 2 or st["min"] >= o.price * 0.97:
+        return ""
+    return f"Seen as low as {money(sym, st['min'])} ({ago_text(st['min_at'])})"
 
 
 def price_verdict(o: Offer, st: dict | None) -> tuple[str | None, str]:

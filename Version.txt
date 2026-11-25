@@ -1,5 +1,7 @@
-62
+63
 https://github.com/M000Nz/Deals
+note: Find more / Refresh / changing the Daily deals category now takes over straight away - it stops whatever search or scan is still running
+note: Result cards show 'Seen as low as $X (3 weeks ago)' for products Deals has priced before, even ones you don't follow
 note: Starting a new search now stops the one still running, so the search you want is never held up
 note: Watchlist graph: the 'target' and 'usual' labels sit in a left margin beside their lines instead of over the graph
 note: Discount codes are now read from the wording of OzBargain posts (e.g. 'use code SAVE10'); gift-card, cashback and bank offers are still never shown
