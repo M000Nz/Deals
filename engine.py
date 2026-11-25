@@ -37,7 +37,7 @@ from urllib.parse import parse_qs, quote, quote_plus, unquote, urlencode, urljoi
 import requests
 from bs4 import BeautifulSoup
 
-ENGINE_VERSION = 78
+ENGINE_VERSION = 79
 GITHUB_REPO = "M000Nz/Deals"
 GITHUB_API = "https://api.github.com"
 FROZEN = bool(getattr(sys, "frozen", False))                  # True when running as the packaged Deals.exe
@@ -2456,7 +2456,7 @@ def page_price(html: str) -> float | None:
     return None
 
 
-def verify_store_prices(offers: list, limit: int = 24, budget: float = 9.0, cfg: dict | None = None) -> int:
+def verify_store_prices(offers: list, limit: int = 24, budget: float = 9.0, cfg: dict | None = None, on_fix=None) -> int:
     """Correct prices from the product pages of VERIFY_STORES. Returns how many prices were changed."""
     # Price-comparison listings (StaticICE) are checked too: they often carry an old regular price while the shop's own
     # page already shows the sale price (this is how a $677 sale showed as $1,699).
@@ -2495,16 +2495,24 @@ def verify_store_prices(offers: list, limit: int = 24, budget: float = 9.0, cfg:
     ex = ThreadPoolExecutor(max_workers=8)
     futs = [ex.submit(one, o) for o in todo]
     try:
-        for fut in wait(futs, timeout=budget)[0]:
-            o, v = fut.result()
-            if v and abs(v - o.price) > 0.5:
-                old = o.price
-                o.price = v
-                if not o.was_price and v * 1.05 < old < v * 5:      # the figure we grabbed was probably the crossed-out price
-                    o.was_price = old
-                elif o.was_price and o.was_price <= v:
-                    o.was_price = None
-                fixed += 1
+        pending, end = set(futs), time.time() + budget
+        while pending and time.time() < end:            # corrections are handed over one by one as each page finishes
+            finished, pending = wait(pending, timeout=max(0.05, end - time.time()), return_when=FIRST_COMPLETED)
+            for fut in finished:
+                o, v = fut.result()
+                if v and abs(v - o.price) > 0.5:
+                    old = o.price
+                    o.price = v
+                    if not o.was_price and v * 1.05 < old < v * 5:      # the figure we grabbed was probably the crossed-out price
+                        o.was_price = old
+                    elif o.was_price and o.was_price <= v:
+                        o.was_price = None
+                    fixed += 1
+                    if on_fix:
+                        try:
+                            on_fix(o)
+                        except Exception:  # noqa: BLE001
+                            pass
     finally:
         ex.shutdown(wait=False, cancel_futures=True)
     try:                                                 # a small note you can send me if a price is still wrong

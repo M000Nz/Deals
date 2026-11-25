@@ -157,7 +157,7 @@ def ensure_deps():
 ensure_deps()
 import engine as E  # noqa: E402
 
-if getattr(E, "ENGINE_VERSION", 0) < 78:
+if getattr(E, "ENGINE_VERSION", 0) < 79:
     _r = tk.Tk()
     _r.withdraw()
     messagebox.showerror("Deals", "engine.py is out of date.\n\nReplace it with the new engine.py from the "
@@ -1515,6 +1515,7 @@ class App(tk.Tk):
         self._digest_busy, self._ml_busy, self._ml_pending = False, False, []
         self._pc_busy, self._pc_base, self._pc_dots = None, "", 0
         self._pc_banner = self._pc_title = None
+        self._pc_redraw = False
         self.show_hidden, self.hidden_offers = False, []      # "Show hidden listings" at the bottom of the results
         self._sgen, self._scancel = 0, None               # which search is current, and how to stop the one before
         self.progs = []                                   # running progress cards (so a hidden one can be brought back)
@@ -2877,12 +2878,31 @@ class App(tk.Tk):
         def work():
             fixed = 0
             try:
-                fixed = E.verify_store_prices(todo, cfg=cfg)
+                fixed = E.verify_store_prices(todo, cfg=cfg, on_fix=lambda o: self.q.put(lambda: self.price_fixed(gen)))
             except Exception:  # noqa: BLE001
                 log_error(traceback.format_exc())
             self.q.put(lambda: self.price_check_done(gen, fixed))
 
         threading.Thread(target=work, daemon=True).start()
+
+    def price_fixed(self, gen):
+        """One price was just corrected: redraw soon (several arriving together are drawn once), keeping the scroll position."""
+        if gen != self._sgen or self.view != "results" or self._pc_redraw:
+            return
+        self._pc_redraw = True
+
+        def go():
+            self._pc_redraw = False
+            if gen != self._sgen or self.view != "results":
+                return
+            try:
+                keep = self.res.canvas.yview()[0]
+            except tk.TclError:
+                keep = 0.0
+            self.render_results()
+            if keep > 0.02:
+                self.after(60, lambda: self.res.canvas.yview_moveto(keep))
+        self.after(350, go)
 
     def animate_price_check(self, gen):
         """A small moving note while the shop pages are being re-read, so it's clear the app is still confirming prices."""
@@ -2907,15 +2927,8 @@ class App(tk.Tk):
             except tk.TclError:
                 pass
             self._pc_banner = None
-        if not fixed or gen != self._sgen or self.view != "results":
-            return
-        try:
-            keep = self.res.canvas.yview()[0]
-        except tk.TclError:
-            keep = 0.0
-        self.render_results()
-        if keep > 0.02:
-            self.after(60, lambda: self.res.canvas.yview_moveto(keep))
+        if fixed and gen == self._sgen:                 # the banner is already gone; make sure the last correction is drawn
+            self.price_fixed(gen)
 
     def section(self, parent, text, accent):
         self.label(parent, text, "accent" if accent else "muted", font=self.f_small_b).pack(
