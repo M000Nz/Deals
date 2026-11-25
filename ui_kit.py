@@ -1161,8 +1161,8 @@ class Chart:
     """Smooth price-history line chart (oldest to newest) with a soft fill; the last point turns accent
     coloured when the price has fallen."""
 
-    def __init__(self, app, parent, points, height=40, on_click=None, lines=()):
-        self.app, self.points = app, points
+    def __init__(self, app, parent, points, height=40, on_click=None, lines=(), fixed_gutter=False):
+        self.app, self.points, self.fixed_gutter = app, points, fixed_gutter
         self.lines = [(v, k) for v, k in lines if v]          # [(price, 'target' | 'usual')] dashed guides
         self.cv = app.reg(tk.Canvas(parent, height=px(height), bd=0, highlightthickness=0), "canvas")
         self._job, self._size = None, None
@@ -1188,9 +1188,11 @@ class Chart:
 
     def _gutter(self):
         """Room on the left for the guide labels, so they never sit on top of the graph."""
-        if not self.lines:
+        if not self.lines and not self.fixed_gutter:
             return 0
         f = tkfont.Font(font=self.app.f_small)
+        if self.fixed_gutter:                          # same room in every row, whichever guides it has
+            return max(f.measure("target"), f.measure("usual")) + px(12)
         return max(f.measure("target" if k == "target" else "usual") for _, k in self.lines) + px(12)
 
     def _guides(self, w, h, lo, hi, pad, left=0):

@@ -4055,11 +4055,13 @@ class App(tk.Tk):
         hist = E.price_history(con, r["id"])
         reg = E.regular_price(con, r["id"])
         txt = self.frame(mid)                            # the figures sit to the left of the graph; the graph uses the height
-        txt.pack(side="left", anchor="n", padx=(0, 16))
+        mid.columnconfigure(0, minsize=px(262))          # the figures get a fixed column, so every graph starts and ends
+        mid.columnconfigure(1, weight=1)                 # at the same place in every row
+        txt.grid(row=0, column=0, sticky="nw", padx=(0, 16))
         ch = Chart(self, mid, [h["price"] for h in hist][-30:], height=120, on_click=lambda i=r["id"]: HistoryDialog(self, i),
-                   lines=[(r["max_price"], "target"), (reg[0] if reg else None, "usual")])
+                   lines=[(r["max_price"], "target"), (reg[0] if reg else None, "usual")], fixed_gutter=True)
         ch.cv.configure(width=px(290))
-        ch.pack(side="right", fill="both", expand=True)
+        ch.cv.grid(row=0, column=1, sticky="nsew")
         parts = history_text(sym, hist).split("\n")
         self.label(txt, parts[0], "muted", font=self.f_small, justify="left", wraplength=px(230)).pack(anchor="w")
         if len(parts) > 1:
