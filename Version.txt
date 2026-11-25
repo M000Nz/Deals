@@ -1,4 +1,4 @@
-52
+53
 https://github.com/M000Nz/Deals
-note: Fixed updates getting stuck on "applications are using files" - Deals now closes its browser helper (node.exe) before the installer starts
-note: The installer also stops any leftover Deals processes itself, so installing over a running copy works
+note: Watchlist graphs are shorter and sit right beside their buttons
+note: New Verify button in Sources for shops that show a bot check - pass it once in a real browser window and Deals reuses that session

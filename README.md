@@ -113,7 +113,7 @@ A result is a deal when at least one of these is true: the shop shows a **was pr
 
 **Is my data sent anywhere?** No. Your watchlist, history and settings stay in `%APPDATA%\Deals`. Alert passwords are kept in your system's password store when the optional `keyring` add-on is available.
 
-**Why does a shop show "Bot-check page shown" or "Needs JavaScript"?** Some shops block automated visits. Deals tries a hidden browser for those; shops with serious bot protection can't always be read, and are paused so they don't slow searches. Use **Sources → Test** on one shop, or **Repair**, to retry.
+**Why does a shop show "Bot-check page shown" or "Needs JavaScript"?** Some shops block automated visits. Deals tries a hidden browser for those; shops with serious bot protection can't always be read, and are paused so they don't slow searches. Press **Verify** beside the shop in Sources: a real browser window opens, you pass the check once, close it, and Deals reuses that session for later searches (it only works for checks a person can pass). You can also use **Test** on one shop, or **Repair**, to retry. StaticICE, Getprice and OzBargain still cover many of the shops that block direct visits.
 
 **Why isn't eBay in the results?** It's hidden by default, whether it comes directly or through OzBargain. Add or clear hidden sites in **Settings → hidden sites**.
 
@@ -166,7 +166,7 @@ python selftest.py            # checks the price reader against saved example pa
 
 1. Raise `ENGINE_VERSION` in `engine.py`, and the matching check in `DealScraper.pyw`.
 2. Put the version on the first line of `Version.txt`, the repository URL on the second, then one `note:` line per change.
-3. Commit and push, then run the **release** workflow (Actions → *Run workflow*) with the tag, e.g. `v52`.
+3. Commit and push, then run the **release** workflow (Actions → *Run workflow*) with the tag, e.g. `v53`.
 
 The workflow builds the app with PyInstaller, runs `--selftest` on the built exe, builds the installer with Inno Setup and publishes `Deals-Setup.exe` with its `.sha256` to the release. `build_exe.bat` is only for local test builds.
 

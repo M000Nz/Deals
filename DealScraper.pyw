@@ -155,7 +155,7 @@ def ensure_deps():
 ensure_deps()
 import engine as E  # noqa: E402
 
-if getattr(E, "ENGINE_VERSION", 0) < 52:
+if getattr(E, "ENGINE_VERSION", 0) < 53:
     _r = tk.Tk()
     _r.withdraw()
     messagebox.showerror("Deals", "engine.py is out of date.\n\nReplace it with the new engine.py from the "
@@ -634,11 +634,17 @@ class StoresDialog(tk.Toplevel):
                 x.pack(side="right")
             app.button(row, "Test", lambda i=r["id"]: self.test_one(i), pad=(10, 2), style="ghost",
                        font=app.f_small).pack(side="right")
+            if any(w in (st or "").lower() for w in ("bot", "blocked", "protection")):
+                app.button(row, "Verify", lambda i=r["id"]: self.verify_one(i), pad=(10, 2), style="ghost",
+                           font=app.f_small).pack(side="right", padx=(0, 4))
             app.label(row, f"{mark} {st}", "muted", font=app.f_small).pack(side="right", padx=8)
             app.frame(self.sf.inner, "line", height=1).pack(fill="x", padx=12)
 
     def test_one(self, i):
         self.app.test_store_one(i, self.refresh)
+
+    def verify_one(self, i):
+        self.app.verify_store(i, self.refresh)
 
     def set_enabled(self, i, on):
         con = E.db()
@@ -2846,7 +2852,7 @@ class App(tk.Tk):
                         im.draft("RGB", (self.iw * 2, self.ih * 2))
                     except Exception:  # noqa: BLE001
                         pass
-                    if min(im.size) < 52:                   # a tracking pixel or icon, not a product photo
+                    if min(im.size) < 53:                   # a tracking pixel or icon, not a product photo
                         why.append("too small (placeholder?)")
                         continue
                     return self._prepare(im)
@@ -3165,8 +3171,9 @@ class App(tk.Tk):
                 w.bind("<Button-1>", lambda e, i=r["id"]: self.fold_watch([i], False))
             return
         row.columnconfigure(0, minsize=290)         # fixed columns so every graph lines up the same
-        row.columnconfigure(1, weight=1)
+        row.columnconfigure(1, minsize=px(330))      # a compact graph, with the buttons right beside it
         row.columnconfigure(2, minsize=110)
+        row.columnconfigure(3, weight=1)
         left = self.frame(row)
         left.grid(row=0, column=0, sticky="nw", padx=(0, 22))
         head = self.frame(left)
@@ -3223,7 +3230,7 @@ class App(tk.Tk):
                        "accent" if tone == "good" else "text" if tone == "wait" else "muted", font=self.f_small_b if tone != "ok" else self.f_small,
                        wraplength=520, justify="left").pack(anchor="w")
         right = self.frame(row)
-        right.grid(row=0, column=2, sticky="ne")
+        right.grid(row=0, column=2, sticky="nw")
         if r["best_url"]:
             self.button(right, "Open", lambda u=r["best_url"]: self.open_url(u), pad=(14, 4),
                         font=self.f_small).pack(anchor="e")
@@ -3473,6 +3480,40 @@ class App(tk.Tk):
                 self.tests_done(results, done)
             self.q.put(finish)
 
+        threading.Thread(target=work, daemon=True).start()
+
+    def verify_store(self, store_id, done=None):
+        """Let a person pass a shop's bot check in a real browser window; Deals then reuses those cookies."""
+        con = E.db()
+        row = con.execute("SELECT * FROM stores WHERE id=?", (store_id,)).fetchone()
+        if not row:
+            return
+        store = dict(row)
+        if not messagebox.askokcancel(
+                "verify " + store["name"],
+                f"A browser window will open on {store['name']}.\n\nIf it shows a check (for example 'verify you are human'), "
+                "complete it, look at a product page if you like, then CLOSE the window. Deals keeps that session and uses it "
+                "for later searches, then tests the shop again.\n\nThis only works for checks a person can pass; shops "
+                "that refuse all automated visits may still not work."):
+            return
+        url = (store.get("alt_url") or store["search_url"]).replace("{query}", E.sample_query(store).replace(" ", "+"))
+        self.set_status(f"verify {store['name']} in the browser window, then close it...")
+
+        def work():
+            try:
+                E.BROWSER.verify(url)
+                err = ""
+            except Exception as ex:  # noqa: BLE001
+                log_error(traceback.format_exc())
+                err = str(ex)[:120] or "the browser could not be opened"
+
+            def finish():
+                if err:
+                    self.set_status("couldn't open the browser: " + err)
+                    return messagebox.showinfo("verify", "Couldn't open a browser window: " + err)
+                E.reset_site_failures()
+                self.test_store_one(store_id, done)
+            self.q.put(finish)
         threading.Thread(target=work, daemon=True).start()
 
     def test_store_one(self, store_id, done=None):

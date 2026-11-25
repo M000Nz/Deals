@@ -37,7 +37,7 @@ from urllib.parse import parse_qs, quote, quote_plus, unquote, urlencode, urljoi
 import requests
 from bs4 import BeautifulSoup
 
-ENGINE_VERSION = 52
+ENGINE_VERSION = 53
 GITHUB_REPO = "M000Nz/Deals"
 GITHUB_API = "https://api.github.com"
 FROZEN = bool(getattr(sys, "frozen", False))                  # True when running as the packaged Deals.exe
@@ -846,6 +846,10 @@ TRACKERS = ("google-analytics", "googletagmanager", "doubleclick", "googlesyndic
             "livechat", "tawk.to", "bing.com/bat", "snapchat", "klaviyo", "yotpo", "trustpilot")
 
 
+def browser_state_path() -> Path:
+    return DB_PATH.parent / "browser_state.json"
+
+
 class BrowserEngine:
     """One shared headless browser (Microsoft Edge / Chrome if installed, else Playwright's Chromium).
     Pages load with JavaScript like a normal visit, up to 3 at once, from any thread."""
@@ -942,6 +946,59 @@ class BrowserEngine:
             self.error = ("no browser found - install one from Settings" if "xecutable" in str(e)
                           else (msg[0][:160] if msg else "browser failed to start"))
 
+    def _state(self):
+        """Cookies saved after you passed a shop's check yourself (Sources > Verify), if any."""
+        try:
+            p = browser_state_path()
+            return json.loads(p.read_text(encoding="utf-8")) if p.exists() else None
+        except (OSError, ValueError):
+            return None
+
+    async def _verify(self, url: str, wait_s: int = 600) -> bool:
+        """Open a real, visible browser on the shop so a person can pass its check. Cookies are kept and reused by the
+        hidden browser. Returns True once the window was closed."""
+        kw = {"headless": False, "args": ["--no-first-run"]}
+        if self.channel and self.channel != "chromium":
+            kw["channel"] = self.channel
+        browser = await self.pw.chromium.launch(**kw)
+        try:
+            ctx = await browser.new_context(user_agent=self.ua, locale="en-AU", timezone_id="Australia/Sydney",
+                                            storage_state=self._state(), no_viewport=True)
+            page = await ctx.new_page()
+            closed = asyncio.Event()
+            browser.on("disconnected", lambda *_: closed.set())
+            ctx.on("close", lambda *_: closed.set())
+            try:
+                await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+            except Exception:  # noqa: BLE001
+                pass
+            last, waited = None, 0
+            while not closed.is_set() and waited < wait_s:
+                try:
+                    await asyncio.wait_for(closed.wait(), 2)
+                except asyncio.TimeoutError:
+                    waited += 2
+                    try:
+                        last = await ctx.storage_state()          # keep the newest cookies; the window may close any moment
+                    except Exception:  # noqa: BLE001
+                        pass
+            if last:
+                p = browser_state_path()
+                tmp = p.with_suffix(".tmp")
+                tmp.write_text(json.dumps(last), encoding="utf-8")
+                os.replace(tmp, p)
+            return True
+        finally:
+            try:
+                await browser.close()
+            except Exception:  # noqa: BLE001
+                pass
+
+    def verify(self, url: str) -> bool:
+        if not self.start():
+            raise FetchError("nobrowser", self.error or "browser unavailable")
+        return asyncio.run_coroutine_threadsafe(self._verify(url), self.loop).result(660)
+
     _STEALTH = """
         Object.defineProperty(navigator,'webdriver',{get:()=>undefined});
         Object.defineProperty(navigator,'languages',{get:()=>['en-AU','en-GB','en']});
@@ -955,7 +1012,7 @@ class BrowserEngine:
     async def _render(self, url: str, timeout: int, warm: bool = False) -> str:
         async with self.sem:
             ctx = await self.browser.new_context(user_agent=self.ua, locale="en-AU", timezone_id="Australia/Sydney",
-                                                 viewport={"width": 1024, "height": 768})
+                                                 viewport={"width": 1024, "height": 768}, storage_state=self._state())
             try:
                 await ctx.add_init_script(self._STEALTH)
                 page = await ctx.new_page()
@@ -1728,6 +1785,13 @@ _HOST_SEMS: dict = {}
 _HOST_LOCK = threading.Lock()
 _SCAN_CACHE: dict = {}
 _SITE_FAIL: dict = {}
+
+
+def reset_site_failures() -> None:
+    """Forget 'this site just failed' memories, e.g. after you verified a shop in the browser."""
+    with _HOST_LOCK:
+        _SITE_FAIL.clear()
+        _SCAN_CACHE.clear()
 SCAN_TTL = 300
 FAIL_TTL = 90           # a site that just failed isn't asked again for other watchlist items within 90 seconds          # the same search at the same store within 5 minutes is answered from memory
 
