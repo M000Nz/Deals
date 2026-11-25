@@ -37,7 +37,7 @@ from urllib.parse import parse_qs, quote, quote_plus, unquote, urlencode, urljoi
 import requests
 from bs4 import BeautifulSoup
 
-ENGINE_VERSION = 70
+ENGINE_VERSION = 71
 GITHUB_REPO = "M000Nz/Deals"
 GITHUB_API = "https://api.github.com"
 FROZEN = bool(getattr(sys, "frozen", False))                  # True when running as the packaged Deals.exe
@@ -1806,10 +1806,57 @@ def _staticice_offers(page: str, base_url: str) -> list[Offer]:
     return out
 
 
+def _amazon_offers(soup, base_url: str) -> list[Offer]:
+    """Amazon search results, read from Amazon's own markup: every result is a div[data-component-type=s-search-result];
+    the price you pay is the first .a-price, the crossed-out RRP is the .a-price.a-text-price. (The general reader was
+    picking up pieces like '. 99 RRP' as titles, and the sponsored click-through links.)"""
+    out, seen = [], set()
+    for card in soup.select('div[data-component-type="s-search-result"]'):
+        asin = (card.get("data-asin") or "").strip()
+        if not asin or asin in seen:
+            continue
+        h2 = card.find("h2")
+        title = ""
+        if h2 is not None:
+            title = (h2.get("aria-label") or h2.get_text(" ", strip=True) or "").strip()
+        if not title:
+            img = card.select_one("img.s-image")
+            title = (img.get("alt") if img is not None else "") or ""
+        title = re.sub(r"\s+", " ", title).strip()
+        if len(title) < 4:
+            continue
+        price = was = None
+        for el in card.select("span.a-price"):
+            off = el.select_one("span.a-offscreen")
+            v = parse_price(off.get_text(strip=True) if off is not None else el.get_text(" ", strip=True))
+            if not v or v <= 0:
+                continue
+            if "a-text-price" in (el.get("class") or []) or el.get("data-a-strike") == "true":
+                was = was or v
+            elif price is None:
+                price = v
+        if price is None:
+            continue
+        if was is not None and was <= price * 1.02:
+            was = None
+        img = card.select_one("img.s-image")
+        seen.add(asin)
+        out.append(Offer("Amazon AU", title, price, urljoin(base_url, f"/dp/{asin}"), was,
+                         image=(img.get("src") if img is not None else None),
+                         oos=bool(re.search(r"(?i)currently unavailable|temporarily out of stock", card.get_text(" ", strip=True)))))
+    return out
+
+
 def _parse_store_page(page: str, url: str, store: dict) -> list[Offer]:
     soup = make_soup(page)
     if store.get("item"):
         return _selector_offers(soup, url, store)
+    if "amazon.com" in url:
+        got = _amazon_offers(soup, url)
+        if got:
+            for o in got:
+                o.store = store["name"]
+            return got
     return _jsonld_offers(soup, url, store["name"]) or _heuristic_offers(soup, url, store["name"])
 
 
