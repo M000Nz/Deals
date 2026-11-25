@@ -1,7 +1,8 @@
-79
+80
 https://github.com/M000Nz/Deals
 note: 'Why these results?' now shows any crossed-out price; with developer mode on it also shows where each result came from (the shop's own search, StaticICE or OzBargain) and the outcome of the price re-check
 note: New quiet link at the bottom of search results: 'Show N hidden listings' reveals everything left out (filtered by your used / accessories settings, too-cheap listings, hidden sites and listings you reported), grouped by reason
+note: Developer mode: the search report lists the OzBargain items returned for a search
 note: Price corrections now appear one by one as each shop page is checked (best matches first), instead of all at the end
 note: While prices are being confirmed against the shops' own pages, a large centred 'Confirming the best prices...' banner sits at the top of the results (above Deals), and the results line shows a matching moving note
 note: Searches are faster: the shop-page price check (JB Hi-Fi and others) now runs after the results appear and updates the cards in place, instead of making you wait for it

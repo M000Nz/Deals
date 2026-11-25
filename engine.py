@@ -37,7 +37,7 @@ from urllib.parse import parse_qs, quote, quote_plus, unquote, urlencode, urljoi
 import requests
 from bs4 import BeautifulSoup
 
-ENGINE_VERSION = 79
+ENGINE_VERSION = 80
 GITHUB_REPO = "M000Nz/Deals"
 GITHUB_API = "https://api.github.com"
 FROZEN = bool(getattr(sys, "frozen", False))                  # True when running as the packaged Deals.exe
@@ -2347,6 +2347,7 @@ class Report(list):
     hidden = 0     # from sites you've chosen to hide (eBay by default)
     widened = False  # a thin search was automatically widened to every shop
     words: dict = {}  # word -> how many listings (before filtering) used it
+    ozb_titles: list = []      # what the OzBargain feeds returned (for the developer report)
     hidden_offers: list = []   # (offer, reason) for listings kept out of the results: "reported" | "site" | "cheap"
 
 
@@ -2638,6 +2639,7 @@ def _find_pass(queries: list[tuple], stores: list[dict], cfg: dict | None = None
                 seen_u.add(o.url)
                 uniq.append((o, why))
         report.hidden_offers = uniq
+        report.ozb_titles = [f"${o.price:,.0f}  {o.title[:85]}" for o in raw if o.source == "ozb"][:60]
         report.words = {}
         for o in raw[:800]:                         # words the shops' own search found - used for "did you mean"
             for w in set(re.findall(r"[a-z]{4,}", o.title.lower())):
@@ -2690,6 +2692,8 @@ def _note_search(queries: list[tuple], out: dict) -> None:
             was = f"  was ${o.was_price:,.2f}" if o.was_price else ""
             lines.append(f"- {o.score:>3}  ${o.price:,.2f}  {o.store}{f' [{src}]' if dev else ''}  {o.title[:80]}{was}")
         if dev:
+            if getattr(rep, "ozb_titles", None):
+                lines += ["", f"OZBARGAIN FEED ITEMS ({len(rep.ozb_titles)} returned)"] + [f"- {t}" for t in rep.ozb_titles[:40]]
             try:
                 chk = (DATA_DIR / "price_check.log").read_text(encoding="utf-8").strip()
                 if chk:
