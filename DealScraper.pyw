@@ -157,7 +157,7 @@ def ensure_deps():
 ensure_deps()
 import engine as E  # noqa: E402
 
-if getattr(E, "ENGINE_VERSION", 0) < 56:
+if getattr(E, "ENGINE_VERSION", 0) < 57:
     _r = tk.Tk()
     _r.withdraw()
     messagebox.showerror("Deals", "engine.py is out of date.\n\nReplace it with the new engine.py from the "
@@ -513,7 +513,9 @@ class ProgressOverlay:
 
     def __init__(self, app, host, title, total, note=""):
         P = app.P
-        self.app, self.total, self.done, self.alive = app, max(total, 1), 0, True
+        self.indet = total is None                          # no count: an animated bar and a live "what it's doing" line
+        self.app, self.total, self.done, self.alive = app, max(total or 1, 1), 0, True
+        self.t0, self.phase = time.time(), 0.0
         self.ov = tk.Frame(host, bg=P["bg"], bd=0, highlightthickness=0)
         self.ov.place(x=0, y=0, relwidth=1, relheight=1)
         self.ov.lift()
@@ -529,13 +531,39 @@ class ProgressOverlay:
         self.bar = tk.Canvas(box, width=self.w, height=self.h, bg=P["line"], bd=0, highlightthickness=0)
         self.bar.pack(anchor="w", pady=(18, 10))
         self.fill = self.bar.create_rectangle(0, 0, 0, self.h, fill=P["accent"], width=0)
-        self.count = tk.Label(box, text="Starting...", font=app.f_bold, bg=P["bg"], fg=P["fg"], bd=0, anchor="w")
+        self.count = tk.Label(box, text="Working..." if self.indet else "Starting...", font=app.f_bold, bg=P["bg"],
+                              fg=P["fg"], bd=0, anchor="w")
         self.count.pack(anchor="w")
         self.item = tk.Label(box, text="", font=app.f_small, bg=P["bg"], fg=P["muted"], bd=0, anchor="w", width=48)
         self.item.pack(anchor="w", pady=(2, 0))
         self.fails = tk.Label(box, text="", font=app.f_small, bg=P["bg"], fg=P["muted"], bd=0, anchor="w")
         self.fails.pack(anchor="w")
         app.button(box, "Hide", self.close, pad=(18, 7), style="ghost").pack(anchor="w", pady=(16, 0))
+        if self.indet:
+            self._anim()
+
+    def _anim(self):
+        """Indeterminate mode: a bar segment sweeps back and forth, with the seconds so far."""
+        if not self.alive:
+            return
+        try:
+            self.phase = (self.phase + 0.035) % 2.0
+            p = self.phase if self.phase <= 1.0 else 2.0 - self.phase
+            seg = self.w * 0.3
+            x = (self.w - seg) * p
+            self.bar.coords(self.fill, x, 0, x + seg, self.h)
+            self.count.configure(text=f"Working...  {int(time.time() - self.t0)}s")
+            self.bar.after(40, self._anim)
+        except tk.TclError:
+            self.alive = False
+
+    def step(self, text):
+        """What is happening right now (shown under the bar)."""
+        if self.alive:
+            try:
+                self.item.configure(text=text[:70])
+            except tk.TclError:
+                self.alive = False
 
     def update(self, done, item="", bad=None):
         if not self.alive:
@@ -643,10 +671,10 @@ class StoresDialog(tk.Toplevel):
             app.frame(self.sf.inner, "line", height=1).pack(fill="x", padx=12)
 
     def test_one(self, i):
-        self.app.test_store_one(i, self.refresh)
+        self.app.test_store_one(i, self.refresh, host=self)
 
     def verify_one(self, i):
-        self.app.verify_store(i, self.refresh)
+        self.app.verify_store(i, self.refresh, host=self)
 
     def set_enabled(self, i, on):
         con = E.db()
@@ -2854,7 +2882,7 @@ class App(tk.Tk):
                         im.draft("RGB", (self.iw * 2, self.ih * 2))
                     except Exception:  # noqa: BLE001
                         pass
-                    if min(im.size) < 56:                   # a tracking pixel or icon, not a product photo
+                    if min(im.size) < 57:                   # a tracking pixel or icon, not a product photo
                         why.append("too small (placeholder?)")
                         continue
                     return self._prepare(im)
@@ -3484,7 +3512,7 @@ class App(tk.Tk):
 
         threading.Thread(target=work, daemon=True).start()
 
-    def verify_store(self, store_id, done=None):
+    def verify_store(self, store_id, done=None, host=None):
         """Let a person pass a shop's bot check in a real browser window; Deals then reuses those cookies."""
         con = E.db()
         row = con.execute("SELECT * FROM stores WHERE id=?", (store_id,)).fetchone()
@@ -3514,26 +3542,28 @@ class App(tk.Tk):
                     self.set_status("couldn't open the browser: " + err)
                     return messagebox.showinfo("verify", "Couldn't open a browser window: " + err)
                 E.reset_site_failures()
-                self.test_store_one(store_id, done)
+                self.test_store_one(store_id, done, host=host)
             self.q.put(finish)
         threading.Thread(target=work, daemon=True).start()
 
-    def test_store_one(self, store_id, done=None):
-        """Test a single shop with a sample search that suits what it sells."""
+    def test_store_one(self, store_id, done=None, host=None):
+        """Test a single shop with a sample search that suits what it sells, showing each step as it happens."""
         con = E.db()
         row = con.execute("SELECT * FROM stores WHERE id=?", (store_id,)).fetchone()
         if not row:
             return
         store, cfg = dict(row), E.get_settings(con)
         cfg["region"] = cfg.get("region") or self.region
-        con.execute("UPDATE stores SET status='Testing...' WHERE id=?", (store_id,))
-        con.commit()
-        if done:
-            done()
+        host = host if host is not None and host.winfo_exists() else self
+        prog = ProgressOverlay(self, host, "Testing " + store["name"], None,
+                               "A sample search, the same way Deals searches this shop.")
+        prog.step("Starting...")
         self.set_status(f"testing {store['name']}...")
 
         def work():
-            status, ok = E.test_store(store, cfg=cfg)
+            def step(t):
+                self.q.put(lambda t=t: (prog.step(t), self.set_status(f"{store['name']}: {t.lower()}")))
+            status, ok = E.test_store(store, cfg=cfg, step=step)
             c = E.db()
             c.execute("UPDATE stores SET status=?, tested_at=? WHERE id=?", (status, time.time(), store_id))
             c.execute("UPDATE stores SET fail_streak=0, skip_until=0 WHERE id=?", (store_id,))
@@ -3544,6 +3574,7 @@ class App(tk.Tk):
             c.commit()
 
             def finish():
+                prog.close()
                 self.set_status(f"{store['name']}: {status}")
                 if done:
                     done()

@@ -37,7 +37,7 @@ from urllib.parse import parse_qs, quote, quote_plus, unquote, urlencode, urljoi
 import requests
 from bs4 import BeautifulSoup
 
-ENGINE_VERSION = 56
+ENGINE_VERSION = 57
 GITHUB_REPO = "M000Nz/Deals"
 GITHUB_API = "https://api.github.com"
 FROZEN = bool(getattr(sys, "frozen", False))                  # True when running as the packaged Deals.exe
@@ -1757,8 +1757,10 @@ def scrape_store(store: dict, query: str, cfg: dict | None = None, full: str | N
     Stores that block plain requests or build their pages with JavaScript are loaded in a real browser."""
     tpl, cfg = store.get("alt_url") or store["search_url"], cfg or {}
     if tpl.startswith("ozb:"):
+        _step("Reading the OzBargain feed")
         return scrape_ozb(store, query, full)
     if "staticice." in tpl:
+        _step("Loading the price-comparison results")
         inc, exc = parse_keywords(full or query)
         url = tpl.replace("{query}", quote_plus(" ".join(inc + ["-" + x for x in exc]))) + "&links=40"
         page = fetch(url)
@@ -1770,28 +1772,35 @@ def scrape_store(store: dict, query: str, cfg: dict | None = None, full: str | N
     url = tpl.replace("{query}", quote_plus(query))
     use_b, rendered = browser_wanted(cfg), False
     if store.get("use_browser") and use_b:
+        _step("Opening the hidden browser and loading the page")
         page, rendered = BROWSER.render(url), True
     else:
         try:
+            _step("Loading the search page")
             page = fetch(url)
         except FetchError as e:
             if e.kind != "blocked" or not use_b:
                 raise
+            _step("The shop refused a plain visit - trying the hidden browser")
             page, rendered = BROWSER.render(url), True            # blocked for scripts: try as a real browser
+    _step("Reading prices from the page")
     offers = _parse_store_page(page, url, store)
     if not offers and not rendered:
         kind = _classify_empty(page) or ("needsjs" if _looks_js(page) else None)
         if kind:
             if not use_b:
                 raise FetchError("needsjs" if kind == "needsjs" else kind, kind)
+            _step("No prices in the page - rebuilding it in the hidden browser")
             page, rendered = BROWSER.render(url), True
             offers = _parse_store_page(page, url, store)
     if not offers and rendered and use_b and _classify_empty(page) == "botcheck":
         try:                                                      # one more go, behaving like a visitor who browsed in
+            _step("A bot check appeared - retrying like a normal visitor")
             page = BROWSER.render(url, 25, warm=True)
             offers = _parse_store_page(page, url, store)
         except FetchError:
             pass
+    _step("Checking what came back")
     if not offers:
         kind = _classify_empty(page)
         if kind:
@@ -2471,8 +2480,23 @@ def sample_query(store: dict) -> str:
     return "laptop"
 
 
-def test_store(store: dict, query: str | None = None, cfg: dict | None = None) -> tuple[str, bool]:
+_STEP = threading.local()
+
+
+def _step(text: str) -> None:
+    """Tell whoever is watching (the Sources test card) what is happening right now."""
+    cb = getattr(_STEP, "cb", None)
+    if cb:
+        try:
+            cb(text)
+        except Exception:  # noqa: BLE001
+            pass
+
+
+def test_store(store: dict, query: str | None = None, cfg: dict | None = None, step=None) -> tuple[str, bool]:
     query = query or sample_query(store)
+    _STEP.cb = step
+    _step(f"Searching for \u201c{query}\u201d")
     try:
         n = len(scrape_store(store, query, cfg, query))
         return status_text(n, None, bool(store.get("_browser_used"))), n > 0
@@ -2480,6 +2504,8 @@ def test_store(store: dict, query: str | None = None, cfg: dict | None = None) -
         return status_text(0, e.kind), False
     except Exception:  # noqa: BLE001
         return status_text(0, "error"), False
+    finally:
+        _STEP.cb = None
 
 
 # --------------------------------------------------------------------------- #

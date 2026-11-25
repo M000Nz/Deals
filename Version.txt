@@ -1,3 +1,4 @@
-56
+57
 https://github.com/M000Nz/Deals
-note: Fixed tabs opening and closing nonstop in the Verify window - Deals now saves only the cookies, not every tracker site's storage
+note: Testing a single shop now shows a card with a moving bar, the seconds so far and what it is doing right now (loading the page, reading prices, opening the hidden browser, retrying after a bot check...)
+note: Fewer screen redraws while a test runs, so the window stays responsive
