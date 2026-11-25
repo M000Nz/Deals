@@ -1,4 +1,7 @@
-57
+58
 https://github.com/M000Nz/Deals
+note: The Sources window opens instantly and fills in as it goes (no more blank list), and the menus drop down without a flash
+note: Testing: Hide only hides the progress card - press Test all again, or the new Show progress button (only visible while testing), to bring it back
+note: Watchlist: the graph is centred and the buttons sit at the far right when items are expanded
 note: Testing a single shop now shows a card with a moving bar, the seconds so far and what it is doing right now (loading the page, reading prices, opening the hidden browser, retrying after a bot check...)
 note: Fewer screen redraws while a test runs, so the window stays responsive

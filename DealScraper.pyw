@@ -157,7 +157,7 @@ def ensure_deps():
 ensure_deps()
 import engine as E  # noqa: E402
 
-if getattr(E, "ENGINE_VERSION", 0) < 57:
+if getattr(E, "ENGINE_VERSION", 0) < 58:
     _r = tk.Tk()
     _r.withdraw()
     messagebox.showerror("Deals", "engine.py is out of date.\n\nReplace it with the new engine.py from the "
@@ -509,23 +509,36 @@ class Form(tk.Toplevel):
 
 
 class ProgressOverlay:
-    """A small card laid over a window that shows work is under way: title, bar, 'N of M' and the current item."""
+    """A small card laid over a window that shows work is under way: title, bar, 'N of M' and the current item.
+    'Hide' only hides it - the work carries on and show() brings it back."""
 
     def __init__(self, app, host, title, total, note=""):
-        P = app.P
         self.indet = total is None                          # no count: an animated bar and a live "what it's doing" line
         self.app, self.total, self.done, self.alive = app, max(total or 1, 1), 0, True
         self.t0, self.phase = time.time(), 0.0
+        self.title_text, self.note, self.item_text, self.bad = title, note, "", None
+        self.hidden, self.ov, self.host = False, None, None
+        self._build(host)
+        try:
+            app.progs.append(self)
+        except AttributeError:
+            pass
+        if self.indet:
+            self._anim()
+
+    def _build(self, host):
+        app, P = self.app, self.app.P
+        self.host = host
         self.ov = tk.Frame(host, bg=P["bg"], bd=0, highlightthickness=0)
         self.ov.place(x=0, y=0, relwidth=1, relheight=1)
         self.ov.lift()
         box = tk.Frame(self.ov, bg=P["bg"], bd=0, highlightthickness=1, highlightbackground=P["border"],
                        padx=px(36), pady=px(28))
         box.place(relx=0.5, rely=0.45, anchor="center")
-        self.title = tk.Label(box, text=title, font=app.f_page, bg=P["bg"], fg=P["fg"], bd=0, anchor="w")
+        self.title = tk.Label(box, text=self.title_text, font=app.f_page, bg=P["bg"], fg=P["fg"], bd=0, anchor="w")
         self.title.pack(anchor="w")
-        if note:
-            tk.Label(box, text=note, font=app.f_small, bg=P["bg"], fg=P["muted"], bd=0, anchor="w", justify="left",
+        if self.note:
+            tk.Label(box, text=self.note, font=app.f_small, bg=P["bg"], fg=P["muted"], bd=0, anchor="w", justify="left",
                      wraplength=px(380)).pack(anchor="w", pady=(6, 0))
         self.w, self.h = px(380), px(8)
         self.bar = tk.Canvas(box, width=self.w, height=self.h, bg=P["line"], bd=0, highlightthickness=0)
@@ -538,9 +551,50 @@ class ProgressOverlay:
         self.item.pack(anchor="w", pady=(2, 0))
         self.fails = tk.Label(box, text="", font=app.f_small, bg=P["bg"], fg=P["muted"], bd=0, anchor="w")
         self.fails.pack(anchor="w")
-        app.button(box, "Hide", self.close, pad=(18, 7), style="ghost").pack(anchor="w", pady=(16, 0))
-        if self.indet:
-            self._anim()
+        app.button(box, "Hide", self.hide, pad=(18, 7), style="ghost").pack(anchor="w", pady=(16, 0))
+        self.hidden = False
+        self._paint()
+
+    def _paint(self):
+        """Put the stored progress onto the widgets (used when the card is rebuilt in another window)."""
+        try:
+            self.item.configure(text=self.item_text)
+            if self.bad is not None:
+                self.fails.configure(text=f"{self.bad} not working so far")
+            if not self.indet and self.done:
+                self.bar.coords(self.fill, 0, 0, self.w * min(self.done / self.total, 1.0), self.h)
+                self.count.configure(text=f"{self.done} of {self.total}   ({100 * self.done // self.total}%)")
+        except tk.TclError:
+            pass
+
+    def hide(self):
+        self.hidden = True
+        try:
+            self.ov.place_forget()
+        except tk.TclError:
+            pass
+
+    def show(self, host=None):
+        """Bring the card back, over `host` if given (rebuilt there if it was made in another window)."""
+        if not self.alive:
+            return
+        try:
+            if host is not None and host is not self.host and host.winfo_exists():
+                try:
+                    self.ov.destroy()
+                except tk.TclError:
+                    pass
+                self._build(host)
+            else:
+                self.ov.place(x=0, y=0, relwidth=1, relheight=1)
+                self.ov.lift()
+                self.hidden = False
+        except tk.TclError:
+            # its window is gone: rebuild over the main window
+            try:
+                self._build(self.app)
+            except tk.TclError:
+                pass
 
     def _anim(self):
         """Indeterminate mode: a bar segment sweeps back and forth, with the seconds so far."""
@@ -561,7 +615,8 @@ class ProgressOverlay:
         """What is happening right now (shown under the bar)."""
         if self.alive:
             try:
-                self.item.configure(text=text[:70])
+                self.item_text = text[:70]
+                self.item.configure(text=self.item_text)
             except tk.TclError:
                 self.alive = False
 
@@ -572,14 +627,20 @@ class ProgressOverlay:
             self.done = done
             self.bar.coords(self.fill, 0, 0, self.w * min(done / self.total, 1.0), self.h)
             self.count.configure(text=f"{done} of {self.total}   ({100 * done // self.total}%)")
-            self.item.configure(text=ui.cap(item)[:60])
+            self.item_text = ui.cap(item)[:60]
+            self.item.configure(text=self.item_text)
             if bad is not None:
+                self.bad = bad
                 self.fails.configure(text=f"{bad} not working so far")
         except tk.TclError:
             self.alive = False
 
     def close(self):
         self.alive = False
+        try:
+            self.app.progs.remove(self)
+        except (AttributeError, ValueError):
+            pass
         try:
             self.ov.destroy()
         except tk.TclError:
@@ -612,11 +673,38 @@ class StoresDialog(tk.Toplevel):
         app.frame(self, "line", height=1).pack(fill="x")
         bar = app.frame(self)
         bar.pack(fill="x", padx=10, pady=6)
-        app.button(bar, "Test all", lambda: app.test_stores(self.refresh, host=self)).pack(side="left", padx=(0, 6))
+        self.b_test = app.button(bar, "Test all", lambda: app.test_stores(self.refresh, host=self))
+        self.b_test.pack(side="left", padx=(0, 6))
+        self.b_prog = app.button(bar, "Show progress", self.show_progress)
+        self.prog_bar = bar
         app.button(bar, "add custom...", lambda: app.add_store(self.refresh)).pack(side="left", padx=(0, 6))
         app.button(bar, "reset list", lambda: (app.reset_stores(), self.refresh())).pack(side="left")
         app.button(bar, "close", self.destroy).pack(side="right")
-        self.refresh()
+        self._gen = 0
+        self.after(10, self.refresh)               # the window appears at once; the rows fill in right after
+        self.poll_progress()
+
+    def show_progress(self):
+        for p in reversed(self.app.progs):
+            if p.alive:
+                p.show(self)
+                break
+        self.poll_progress()
+
+    def poll_progress(self):
+        """'Show progress' only appears while something is running with its card hidden."""
+        try:
+            if not self.winfo_exists():
+                return
+            hidden = any(p.alive and p.hidden for p in self.app.progs)
+            shown = bool(self.b_prog.winfo_manager())
+            if hidden and not shown:
+                self.b_prog.pack(side="left", padx=(0, 6), after=self.b_test)
+            elif not hidden and shown:
+                self.b_prog.pack_forget()
+            self.after(500, self.poll_progress)
+        except tk.TclError:
+            pass
 
     def update_browser_row(self):
         st = E.browser_status(E.get_settings(E.db()))
@@ -649,7 +737,26 @@ class StoresDialog(tk.Toplevel):
         self.update_head()
         self.sf.clear()
         app.prune()
-        for r in rows:
+        self._gen += 1
+        gen = self._gen
+        self._loading = app.label(self.sf.inner, "Loading sources...", "muted")
+        self._loading.pack(padx=14, pady=14, anchor="w")
+        self._build_rows(gen, rows, 0)
+
+    def _build_rows(self, gen, rows, start, batch=12):
+        """Rows are added a dozen at a time so the window stays responsive and never shows a blank list."""
+        try:
+            if gen != self._gen or not self.winfo_exists():
+                return
+        except tk.TclError:
+            return
+        app = self.app
+        if start == 0:
+            try:
+                self._loading.destroy()
+            except tk.TclError:
+                pass
+        for r in rows[start:start + batch]:
             row = app.frame(self.sf.inner)
             row.pack(fill="x", padx=12, pady=4)
             app.switch(row, bool(r["enabled"]), lambda on, i=r["id"]: self.set_enabled(i, on)).pack(side="left")
@@ -669,6 +776,8 @@ class StoresDialog(tk.Toplevel):
                            font=app.f_small).pack(side="right", padx=(0, 4))
             app.label(row, f"{mark} {st}", "muted", font=app.f_small).pack(side="right", padx=8)
             app.frame(self.sf.inner, "line", height=1).pack(fill="x", padx=12)
+        if start + batch < len(rows):
+            self.after(8, lambda: self._build_rows(gen, rows, start + batch))
 
     def test_one(self, i):
         self.app.test_store_one(i, self.refresh, host=self)
@@ -1175,6 +1284,7 @@ class App(tk.Tk):
         self.q = queue.Queue()
         self.tray, self._tray_told, self.tray_close = None, False, False
         self._testing_all, self._test_prog = False, None
+        self.progs = []                                   # running progress cards (so a hidden one can be brought back)
         self._err_count = 0
         self.reg_list, self.scrollers = [], {}
         s = E.get_settings(E.db())
@@ -3200,10 +3310,11 @@ class App(tk.Tk):
             for w in (arrow, name):
                 w.bind("<Button-1>", lambda e, i=r["id"]: self.fold_watch([i], False))
             return
-        row.columnconfigure(0, minsize=290)         # fixed columns so every graph lines up the same
-        row.columnconfigure(1, minsize=px(330))      # a compact graph, with the buttons right beside it
-        row.columnconfigure(2, minsize=110)
+        row.columnconfigure(0, minsize=290)         # text on the left, graph centred, buttons on the far right
+        row.columnconfigure(1, weight=1)
+        row.columnconfigure(2, minsize=px(330))
         row.columnconfigure(3, weight=1)
+        row.columnconfigure(4, minsize=130)
         left = self.frame(row)
         left.grid(row=0, column=0, sticky="nw", padx=(0, 22))
         head = self.frame(left)
@@ -3231,7 +3342,7 @@ class App(tk.Tk):
         for w in (kw, bl):
             w.bind("<Button-1>", lambda e, u=r["best_url"]: self.open_url(u))
         mid = self.frame(row)
-        mid.grid(row=0, column=1, sticky="we", padx=(0, 22))
+        mid.grid(row=0, column=2, sticky="we")
         hist = E.price_history(con, r["id"])
         reg = E.regular_price(con, r["id"])
         Chart(self, mid, [h["price"] for h in hist][-30:], height=60, on_click=lambda i=r["id"]: HistoryDialog(self, i),
@@ -3260,7 +3371,7 @@ class App(tk.Tk):
                        "accent" if tone == "good" else "text" if tone == "wait" else "muted", font=self.f_small_b if tone != "ok" else self.f_small,
                        wraplength=520, justify="left").pack(anchor="w")
         right = self.frame(row)
-        right.grid(row=0, column=2, sticky="nw")
+        right.grid(row=0, column=4, sticky="ne")
         if r["best_url"]:
             self.button(right, "Open", lambda u=r["best_url"]: self.open_url(u), pad=(14, 4),
                         font=self.f_small).pack(anchor="e")
@@ -3468,6 +3579,10 @@ class App(tk.Tk):
     # ----------------------------------------------------------------- stores --
     def test_stores(self, done=None, host=None):
         if getattr(self, "_testing_all", False):
+            p = self._test_prog
+            if p is not None and p.alive:
+                p.show(host if host is not None and host.winfo_exists() else None)
+                return self.set_status("testing - progress card brought back")
             return self.set_status("already testing - one moment")
         con = E.db()
         cfg = E.get_settings(con)

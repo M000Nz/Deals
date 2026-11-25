@@ -571,6 +571,7 @@ class StyledMenu:
         if StyledMenu._open is not None:
             StyledMenu._open.close()
         top = tk.Toplevel(app)
+        top.withdraw()                                             # build it unseen, then show it once, in place
         self.top, StyledMenu._open = top, self
         top.overrideredirect(True)
         top.attributes("-topmost", True)
@@ -578,7 +579,8 @@ class StyledMenu:
         body = tk.Frame(top, bg=P["bg"])
         body.pack(padx=1, pady=1)
         fnt = app.f_norm
-        width = max((tkfont.Font(font=fnt).measure(cap(it[0])) for it in self.items if it), default=80) + px(64)
+        measure = tkfont.Font(font=fnt).measure
+        width = max((measure(cap(it[0])) for it in self.items if it), default=80) + px(64)
         for it in self.items:
             if it is None:
                 tk.Frame(body, bg=P["line"], height=1).pack(fill="x", padx=px(10), pady=px(4))
@@ -625,6 +627,7 @@ class StyledMenu:
             y = max(4, y - h - px(34))
         top.geometry(f"+{int(x)}+{int(y)}")
         _round_corners(top)
+        top.deiconify()
         top.bind("<Escape>", self.close)
         try:
             top.focus_force()
