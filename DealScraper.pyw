@@ -157,7 +157,7 @@ def ensure_deps():
 ensure_deps()
 import engine as E  # noqa: E402
 
-if getattr(E, "ENGINE_VERSION", 0) < 96:
+if getattr(E, "ENGINE_VERSION", 0) < 97:
     _r = tk.Tk()
     _r.withdraw()
     messagebox.showerror("Deals", "engine.py is out of date.\n\nReplace it with the new engine.py from the "
@@ -1555,6 +1555,7 @@ class App(tk.Tk):
         self.prev_prices = {}
         self.thumb_targets, self.pil_cache, self.photo_cache, self.thumb_pending = {}, {}, {}, set()
         self.thumb_fail, self.thumb_pages = {}, {}
+        self._mask_cache = {}
         self.pool = ThreadPoolExecutor(max_workers=4)
         self.status_var = tk.StringVar(value="ready")
         self.next_var = tk.StringVar(value="")
@@ -2332,7 +2333,7 @@ class App(tk.Tk):
                     break
         except queue.Empty:
             pass
-        self.after(30 if busy else 150, self.pump)
+        self.after(30 if busy else 200, self.pump)
 
     def sym(self):
         return E.get_settings(E.db())["currency"]
@@ -3134,6 +3135,7 @@ class App(tk.Tk):
         self.hidden_section(inner, sym)
         if HAS_PIL:
             self.load_thumbs(list(self.thumb_targets))
+            self.prune_pictures()
         if self.rev_hidden:
             self.label(inner, f"{self.rev_hidden} hidden because of their reviews", "muted", font=self.f_small).pack(
                 anchor="w", padx=16, pady=(0, 8))
@@ -3596,6 +3598,28 @@ class App(tk.Tk):
         except OSError:
             pass
 
+    def prune_pictures(self, extra=150):
+        """Every picture of every search used to be kept for the whole session (tens of MB after a day of searching).
+        Keep the ones on screen plus the most recent few, so going back to a search is still instant."""
+        try:
+            keep = set(self.thumb_targets)
+            for cache, keyof in ((self.pil_cache, lambda k: k), (self.photo_cache, lambda k: k[0])):
+                over = len(cache) - (len(keep) * (1 if cache is self.pil_cache else 2) + extra)
+                if over <= 0:
+                    continue
+                for k in list(cache):                    # dicts keep insertion order: oldest first
+                    if over <= 0:
+                        break
+                    if keyof(k) not in keep:
+                        del cache[k]
+                        over -= 1
+            if len(self.thumb_pages) > 2000:
+                self.thumb_pages = {u: p for u, p in list(self.thumb_pages.items())[-1000:]}
+            if len(self.thumb_fail) > 2000:
+                self.thumb_fail = {}
+        except Exception:  # noqa: BLE001
+            log_error(traceback.format_exc())
+
     def _prepare(self, im):
         if im.mode in ("RGBA", "LA", "P"):
             im = im.convert("RGBA")
@@ -3607,13 +3631,15 @@ class App(tk.Tk):
         im.thumbnail((iw, ih), getattr(Image, "Resampling", Image).LANCZOS)
         tile = Image.new("RGB", (iw, ih), (255, 255, 255))
         tile.paste(im, ((iw - im.width) // 2, (ih - im.height) // 2))
-        S = 4
-        big = Image.new("L", (iw * S, ih * S), 0)
-        try:
-            ImageDraw.Draw(big).rounded_rectangle((0, 0, iw * S - 1, ih * S - 1), radius=px(10) * S, fill=255)
-        except AttributeError:                       # very old Pillow: square corners
-            big.paste(255, (0, 0, iw * S, ih * S))
-        mask = big.resize((iw, ih), getattr(Image, "Resampling", Image).LANCZOS)
+        mask = self._mask_cache.get((iw, ih))            # the rounded-corner mask is the same for every picture: make it once
+        if mask is None:
+            S = 4
+            big = Image.new("L", (iw * S, ih * S), 0)
+            try:
+                ImageDraw.Draw(big).rounded_rectangle((0, 0, iw * S - 1, ih * S - 1), radius=px(10) * S, fill=255)
+            except AttributeError:                   # very old Pillow: square corners
+                big.paste(255, (0, 0, iw * S, ih * S))
+            mask = self._mask_cache[(iw, ih)] = big.resize((iw, ih), getattr(Image, "Resampling", Image).LANCZOS)
         return tile, mask
 
     def _fetch_thumb(self, key, page=None):
@@ -4230,14 +4256,17 @@ class App(tk.Tk):
         self.update_badge()
 
     def tick(self):
+        txt = None
         if self.scanning:
-            self.next_var.set("checking...")
+            txt = "checking..."
         elif self.auto_minutes and self.next_at:
             left = int(self.next_at - time.time())
             if left <= 0:
                 self.start_check()
             else:
-                self.next_var.set(f"next check in {left // 60}m {left % 60:02d}s")
+                txt = f"next check in {left // 60}m {left % 60:02d}s"
+        if txt is not None and txt != self.next_var.get():     # only touch the label when the text really changed
+            self.next_var.set(txt)
         self._ticks = getattr(self, "_ticks", 0) + 1
         if self._ticks % 60 == 30:
             try:

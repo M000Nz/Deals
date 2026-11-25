@@ -37,7 +37,7 @@ from urllib.parse import parse_qs, quote, quote_plus, unquote, urlencode, urljoi
 import requests
 from bs4 import BeautifulSoup
 
-ENGINE_VERSION = 96
+ENGINE_VERSION = 97
 GITHUB_REPO = "M000Nz/Deals"
 GITHUB_API = "https://api.github.com"
 FROZEN = bool(getattr(sys, "frozen", False))                  # True when running as the packaged Deals.exe
@@ -1210,6 +1210,9 @@ def fetch_cached(url: str, ttl: int = 600, **kw) -> str:
         raise
     with _FEED_LOCK:
         _FEED_CACHE[url] = (now, text)
+        if len(_FEED_CACHE) > 40:                        # feeds are big strings: drop the stale ones
+            for k in [k for k, v in _FEED_CACHE.items() if now - v[0] >= ttl]:
+                del _FEED_CACHE[k]
     return text
 
 
@@ -2140,6 +2143,9 @@ def _scan_one(store: dict, keywords: str, cfg: dict | None = None):
                 err = "error"
     store["_ms"] = int((time.time() - t_start) * 1000)
     with _HOST_LOCK:
+        if len(_SCAN_CACHE) > 120:                       # each entry holds a shop's whole result list: let old ones go
+            for k in [k for k, v in list(_SCAN_CACHE.items()) if now - v[0] >= SCAN_TTL]:
+                _SCAN_CACHE.pop(k, None)
         if len(_SCAN_CACHE) > 400:
             _SCAN_CACHE.clear()
         _SCAN_CACHE[key] = (now, [replace(o) for o in offers], err, bool(store.get("_browser_used")))
@@ -2602,6 +2608,9 @@ def verify_store_prices(offers: list, limit: int = 24, budget: float = 9.0, cfg:
             notes.append(f"{o.title[:50]} @ {o.price}: {why}")
         else:
             _PAGE_PRICE_CACHE[o.url] = (now, v)
+            if len(_PAGE_PRICE_CACHE) > 600:
+                for k in [k for k, h in list(_PAGE_PRICE_CACHE.items()) if now - h[0] >= 1800] or list(_PAGE_PRICE_CACHE)[:300]:
+                    _PAGE_PRICE_CACHE.pop(k, None)
         return o, v
 
     ex = ThreadPoolExecutor(max_workers=8)
