@@ -37,7 +37,7 @@ from urllib.parse import parse_qs, quote, quote_plus, unquote, urlencode, urljoi
 import requests
 from bs4 import BeautifulSoup
 
-ENGINE_VERSION = 92
+ENGINE_VERSION = 93
 GITHUB_REPO = "M000Nz/Deals"
 GITHUB_API = "https://api.github.com"
 FROZEN = bool(getattr(sys, "frozen", False))                  # True when running as the packaged Deals.exe
@@ -2951,6 +2951,14 @@ def find_offers_many(queries: list[tuple], stores: list[dict], cfg: dict | None 
 
 
 SECOND_PASS_MAX = 18
+BREADTH = {"general": 0, "all": 0, "office": 1, "home": 1, "diy": 1, "tech": 2,
+           "sports": 3, "outdoor": 3, "gaming": 3, "garden": 3}          # anything else (fashion, beauty, baby, books...) = 4
+
+
+def _breadth(st: dict) -> tuple:
+    """How wide a range a shop sells: used to decide who gets a second go first when the search names no kind of product."""
+    cs = (st.get("cats") or "all").split()
+    return (min((BREADTH.get(c, 4) for c in cs), default=0), -len(cs))
 
 
 def second_pass(keywords: str, stores: list[dict], offers: list, report, cfg: dict | None = None, deadline: float = 40.0):
@@ -2961,7 +2969,7 @@ def second_pass(keywords: str, stores: list[dict], offers: list, report, cfg: di
     if not todo or _cancelled(cfg):
         return None
     cats = detect_categories(keywords)
-    todo.sort(key=lambda s: (not _is_marketplace(s),) + _scan_order(s, cats))
+    todo.sort(key=lambda s: (not _is_marketplace(s), _scan_order(s, cats)[0]) + _breadth(s) + (s.get("name", ""),))
     todo = todo[:SECOND_PASS_MAX]
     c2 = dict(cfg or {}, defer_verify="1", scope="all")
     ranked2, rep2 = _find_pass([("q", keywords)], todo, c2, None, deadline, False)["q"]
