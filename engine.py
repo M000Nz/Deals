@@ -37,7 +37,7 @@ from urllib.parse import parse_qs, quote, quote_plus, unquote, urlencode, urljoi
 import requests
 from bs4 import BeautifulSoup
 
-ENGINE_VERSION = 81
+ENGINE_VERSION = 82
 GITHUB_REPO = "M000Nz/Deals"
 GITHUB_API = "https://api.github.com"
 FROZEN = bool(getattr(sys, "frozen", False))                  # True when running as the packaged Deals.exe
@@ -1815,6 +1815,9 @@ def _amazon_offers(soup, base_url: str) -> list[Offer]:
     the price you pay is the first .a-price, the crossed-out RRP is the .a-price.a-text-price. (The general reader was
     picking up pieces like '. 99 RRP' as titles, and the sponsored click-through links.)"""
     out, seen = [], set()
+    stats = {"cards": 0, "noprice": 0, "fromprice": 0, "titles_noprice": []}
+    AMAZON_STATS.clear()
+    AMAZON_STATS.update(stats)
     for card in soup.select('div[data-component-type="s-search-result"]'):
         asin = (card.get("data-asin") or "").strip()
         if not asin or asin in seen:
@@ -1839,7 +1842,18 @@ def _amazon_offers(soup, base_url: str) -> list[Offer]:
                 was = was or v
             elif price is None:
                 price = v
+        stats["cards"] += 1
         if price is None:
+            # items with several sellers or options often show no big price - only "from $399.00" or "Options: ... from $399"
+            m = re.search(r"(?i)(?:from|options?:[^$]{0,40}from|see (?:all )?(?:buying )?options)[^$]{0,20}\$\s*([\d,]+(?:\.\d\d)?)",
+                          card.get_text(" ", strip=True))
+            price = parse_price(m.group(1)) if m else None
+            if price:
+                stats["fromprice"] += 1
+        if price is None:
+            stats["noprice"] += 1
+            if len(stats["titles_noprice"]) < 8:
+                stats["titles_noprice"].append(title[:70])
             continue
         if was is not None and was <= price * 1.02:
             was = None
@@ -1848,7 +1862,11 @@ def _amazon_offers(soup, base_url: str) -> list[Offer]:
         out.append(Offer("Amazon AU", title, price, urljoin(base_url, f"/dp/{asin}"), was,
                          image=(img.get("src") if img is not None else None),
                          oos=bool(re.search(r"(?i)currently unavailable|temporarily out of stock", card.get_text(" ", strip=True)))))
+    AMAZON_STATS.update(stats)
     return out
+
+
+AMAZON_STATS: dict = {}
 
 
 def _parse_store_page(page: str, url: str, store: dict) -> list[Offer]:
@@ -2487,8 +2505,10 @@ def verify_store_prices(offers: list, limit: int = 24, budget: float = 9.0, cfg:
             why = f"plain fetch failed ({type(e).__name__}: {str(e)[:50]})"
         if v is None and use_b:                          # the shop blocks scripts or builds the page late: use a real browser
             try:
-                v = page_price(BROWSER.render(o.url, 15))
-                why += "; browser: " + ("ok" if v else "no price tag on page")
+                bhtml = BROWSER.render(o.url, 15)
+                v = page_price(bhtml)
+                tm = re.search(r"(?is)<title[^>]*>(.*?)</title>", bhtml or "")
+                why += "; browser: " + ("ok" if v else f"no price tag on page (page title: {(tm.group(1).strip()[:60] if tm else 'none')}, {len(bhtml or '')} bytes)")
             except Exception as e:  # noqa: BLE001
                 why += f"; browser failed ({str(e)[:50]})"
         if v is None:
@@ -2696,6 +2716,10 @@ def _note_search(queries: list[tuple], out: dict) -> None:
             was = f"  was ${o.was_price:,.2f}" if o.was_price else ""
             lines.append(f"- {o.score:>3}  ${o.price:,.2f}  {o.store}{f' [{src}]' if dev else ''}  {o.title[:80]}{was}")
         if dev:
+            if AMAZON_STATS.get("cards"):
+                a = AMAZON_STATS
+                lines += ["", f"AMAZON: {a['cards']} result cards, {a['fromprice']} priced from a 'from $' line, {a['noprice']} skipped (no price shown)"]
+                lines += [f"- skipped: {t}" for t in a.get("titles_noprice", [])]
             if getattr(rep, "ozb_titles", None):
                 lines += ["", f"OZBARGAIN FEED ITEMS ({len(rep.ozb_titles)} returned)"] + [f"- {t}" for t in rep.ozb_titles[:40]]
             try:

@@ -1,7 +1,8 @@
-81
+82
 https://github.com/M000Nz/Deals
 note: 'Why these results?' now shows any crossed-out price; with developer mode on it also shows where each result came from (the shop's own search, StaticICE or OzBargain) and the outcome of the price re-check
 note: New quiet link at the bottom of search results: 'Show N hidden listings' reveals everything left out (filtered by your used / accessories settings, too-cheap listings, hidden sites and listings you reported), grouped by reason
+note: Amazon: results that show only a 'from $...' price (several sellers or options) are no longer skipped; the developer report shows how many Amazon cards had no price
 note: OzBargain: busy tags now also read the second page of the feed, so live deals pushed off the first page by newer posts (e.g. during Black Friday) can still be found
 note: Developer mode: the search report lists the OzBargain items returned for a search
 note: Price corrections now appear one by one as each shop page is checked (best matches first), instead of all at the end
