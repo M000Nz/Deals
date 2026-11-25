@@ -37,7 +37,7 @@ from urllib.parse import parse_qs, quote, quote_plus, unquote, urlencode, urljoi
 import requests
 from bs4 import BeautifulSoup
 
-ENGINE_VERSION = 86
+ENGINE_VERSION = 87
 GITHUB_REPO = "M000Nz/Deals"
 GITHUB_API = "https://api.github.com"
 FROZEN = bool(getattr(sys, "frozen", False))                  # True when running as the packaged Deals.exe
@@ -1839,7 +1839,7 @@ def _amazon_offers(soup, base_url: str) -> list[Offer]:
     the price you pay is the first .a-price, the crossed-out RRP is the .a-price.a-text-price. (The general reader was
     picking up pieces like '. 99 RRP' as titles, and the sponsored click-through links.)"""
     out, seen = [], set()
-    stats = {"cards": 0, "noprice": 0, "fromprice": 0, "titles_noprice": []}
+    stats = {"cards": 0, "noprice": 0, "fromprice": 0, "titles_noprice": [], "all": []}
     AMAZON_STATS.clear()
     AMAZON_STATS.update(stats)
     for card in soup.select('div[data-component-type="s-search-result"]'):
@@ -1867,6 +1867,8 @@ def _amazon_offers(soup, base_url: str) -> list[Offer]:
             elif price is None:
                 price = v
         stats["cards"] += 1
+        if len(stats["all"]) < 70:
+            stats["all"].append(f"{asin} {('$%.2f' % price) if price else 'no price'}  {title[:75]}")
         if price is None:
             # items with several sellers or options often show no big price - only "from $399.00" or "Options: ... from $399"
             m = re.search(r"(?i)(?:from|options?:[^$]{0,40}from|see (?:all )?(?:buying )?options)[^$]{0,20}\$\s*([\d,]+(?:\.\d\d)?)",
@@ -2835,6 +2837,7 @@ def _note_search(queries: list[tuple], out: dict) -> None:
                 a = AMAZON_STATS
                 lines += ["", f"AMAZON: {a['cards']} result cards, {a['fromprice']} priced from a 'from $' line, {a['noprice']} skipped (no price shown)"]
                 lines += [f"- skipped: {t}" for t in a.get("titles_noprice", [])]
+                lines += ["", "EVERY AMAZON CARD, IN PAGE ORDER (ASIN, price, title)"] + [f"- {t}" for t in a.get("all", [])]
             if getattr(rep, "ozb_titles", None):
                 lines += ["", f"OZBARGAIN FEED ITEMS ({len(rep.ozb_titles)} returned)"] + [f"- {t}" for t in rep.ozb_titles[:40]]
             try:

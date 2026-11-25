@@ -1,5 +1,6 @@
-86
+87
 https://github.com/M000Nz/Deals
+note: Developer report now lists every Amazon result in page order, to find out why a product (e.g. a watch) is missing from Amazon's results
 note: Amazon (and other big marketplaces) now start first and the search waits for them, so products only Amazon stocks (new watches, etc.) are no longer skipped as 'too slow'
 note: 'Why these results?' now shows any crossed-out price; with developer mode on it also shows where each result came from (the shop's own search, StaticICE or OzBargain) and the outcome of the price re-check
 note: New quiet link at the bottom of search results: 'Show N hidden listings' reveals everything left out (filtered by your used / accessories settings, too-cheap listings, hidden sites and listings you reported), grouped by reason
