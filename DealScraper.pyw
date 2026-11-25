@@ -157,7 +157,7 @@ def ensure_deps():
 ensure_deps()
 import engine as E  # noqa: E402
 
-if getattr(E, "ENGINE_VERSION", 0) < 74:
+if getattr(E, "ENGINE_VERSION", 0) < 75:
     _r = tk.Tk()
     _r.withdraw()
     messagebox.showerror("Deals", "engine.py is out of date.\n\nReplace it with the new engine.py from the "
@@ -1513,6 +1513,7 @@ class App(tk.Tk):
         self._testing_all, self._test_prog = False, None
         self._stream, self._stream_sig, self._dev_clicks, self._dev_t = False, None, 0, 0.0
         self._digest_busy, self._ml_busy, self._ml_pending = False, False, []
+        self._pc_busy = None
         self._sgen, self._scancel = 0, None               # which search is current, and how to stop the one before
         self.progs = []                                   # running progress cards (so a hidden one can be brought back)
         self._err_count = 0
@@ -2711,6 +2712,7 @@ class App(tk.Tk):
                 prog = lambda d, t, g=gen: self.q.put(lambda d=d, t=t: gen == self._sgen and self.on_search_progress(d, t))
                 part = lambda offs, d, t, g=gen: self.q.put(
                     lambda offs=offs, d=d, t=t: gen == self._sgen and self.on_search_partial(offs, d, t, run_q))
+                cfg["defer_verify"] = "1"                        # show results first; shop-page price checks run afterwards
                 offers, report = E.find_offers(run_q, stores, cfg, progress=prog, partial=part)
                 if gen != self._sgen:
                     return                                       # a newer search took over: drop this one
@@ -2850,6 +2852,40 @@ class App(tk.Tk):
         self.set_status("ready")
         if self.view == "results":
             self.res.outer.pack(fill="both", expand=True)
+        self.render_results()
+        if keep > 0.02:
+            self.after(60, lambda: self.res.canvas.yview_moveto(keep))
+        self.start_price_check(offers)
+
+    def start_price_check(self, offers):
+        """Re-read prices from the shop's own product pages (JB Hi-Fi etc.) after the results are already on screen,
+        then refresh the cards if anything changed - so a search never waits for it."""
+        gen = self._sgen
+        cfg = E.get_settings(E.db())
+        todo = [o for o in offers if o.source in ("store", "staticice")][:60]
+        if not todo or self._pc_busy == gen:
+            return
+        self._pc_busy = gen
+
+        def work():
+            fixed = 0
+            try:
+                fixed = E.verify_store_prices(todo, cfg=cfg)
+            except Exception:  # noqa: BLE001
+                log_error(traceback.format_exc())
+            self.q.put(lambda: self.price_check_done(gen, fixed))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def price_check_done(self, gen, fixed):
+        if self._pc_busy == gen:
+            self._pc_busy = None
+        if not fixed or gen != self._sgen or self.view != "results":
+            return
+        try:
+            keep = self.res.canvas.yview()[0]
+        except tk.TclError:
+            keep = 0.0
         self.render_results()
         if keep > 0.02:
             self.after(60, lambda: self.res.canvas.yview_moveto(keep))

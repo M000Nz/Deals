@@ -37,7 +37,7 @@ from urllib.parse import parse_qs, quote, quote_plus, unquote, urlencode, urljoi
 import requests
 from bs4 import BeautifulSoup
 
-ENGINE_VERSION = 74
+ENGINE_VERSION = 75
 GITHUB_REPO = "M000Nz/Deals"
 GITHUB_API = "https://api.github.com"
 FROZEN = bool(getattr(sys, "frozen", False))                  # True when running as the packaged Deals.exe
@@ -2594,10 +2594,11 @@ def _find_pass(queries: list[tuple], stores: list[dict], cfg: dict | None = None
         for o in raw:
             o.used = o.used or bool(USED_RE.search(o.title)) or o.store in USED_ONLY_STORES
         visible = [o for o in raw if not is_hidden_offer(o, words) and o.url not in hid]
-        try:
-            verify_store_prices(visible, cfg=cfg)
-        except Exception:  # noqa: BLE001
-            pass
+        if (cfg or {}).get("defer_verify") != "1":      # the app checks prices after the results are on screen instead
+            try:
+                verify_store_prices(visible, cfg=cfg)
+            except Exception:  # noqa: BLE001
+                pass
         ranked, junk = drop_junk_prices(rank_offers(kw, visible))
         ranked = apply_ozb_discount(ranked)
         try:
