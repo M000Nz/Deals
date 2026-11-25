@@ -28,7 +28,7 @@ import os
 import shutil
 import html as _html
 import xml.etree.ElementTree as ET
-from datetime import datetime
+from datetime import datetime, timedelta
 from email.message import EmailMessage
 from email.utils import parsedate_to_datetime
 from pathlib import Path
@@ -37,7 +37,7 @@ from urllib.parse import parse_qs, quote, quote_plus, unquote, urlencode, urljoi
 import requests
 from bs4 import BeautifulSoup
 
-ENGINE_VERSION = 58
+ENGINE_VERSION = 59
 GITHUB_REPO = "M000Nz/Deals"
 GITHUB_API = "https://api.github.com"
 FROZEN = bool(getattr(sys, "frozen", False))                  # True when running as the packaged Deals.exe
@@ -775,6 +775,7 @@ class Offer:
     oos: bool = False                 # shown as out of stock / unavailable
     used: bool = False                # refurbished, ex-demo, open box, grey import...
     others: list = field(default_factory=list)   # the same product at other stores (set by group_offers)
+    match: str = ""                   # pasted-link searches: "exact" (same barcode / model code), "different" or "" (unknown)
 
 
 class FetchError(Exception):
@@ -2341,8 +2342,20 @@ def _cancelled(cfg) -> bool:
     return bool(ev is not None and ev.is_set())
 
 
+def _partial_rank(kw: str, results: list, cfg: dict | None) -> list:
+    """A quick ranking of what has come back so far (no database writes, no price re-checks)."""
+    words = blocked_words(cfg)
+    raw = [o for _, offs, _ in results for o in offs]
+    for o in raw:
+        o.used = o.used or bool(USED_RE.search(o.title))
+    hid = hidden_url_set(db())
+    visible = [o for o in raw if not is_hidden_offer(o, words) and o.url not in hid]
+    ranked, _ = drop_junk_prices(rank_offers(kw, visible))
+    return apply_ozb_discount(ranked)
+
+
 def _find_pass(queries: list[tuple], stores: list[dict], cfg: dict | None = None, progress=None,
-               deadline: float = 45.0, skip_dead: bool = True) -> dict:
+               deadline: float = 45.0, skip_dead: bool = True, partial=None) -> dict:
     """Scan every (search, store) pair at once on one shared pool. queries = [(key, keywords)].
     Returns {key: (offers ranked by relevance, Report)}. Slow stragglers are dropped after `deadline` seconds."""
     words, now = blocked_words(cfg), time.time()
@@ -2356,6 +2369,7 @@ def _find_pass(queries: list[tuple], stores: list[dict], cfg: dict | None = None
     ex = ThreadPoolExecutor(max_workers=max(1, min(POOL_WORKERS, total)))
     futs = {ex.submit(_scan_one, dict(st), kw, cfg): (k, st) for k, kw in queries for st in picked[k]}
     done, t0, cut, pending = 0, time.time(), deadline, set(futs)
+    last_partial, sent = 0.0, None
     try:
         while pending:
             left = t0 + cut - time.time()
@@ -2368,6 +2382,17 @@ def _find_pass(queries: list[tuple], stores: list[dict], cfg: dict | None = None
                 done += 1
                 if progress:
                     progress(done, total)
+            if partial and len(queries) == 1 and finished and pending and time.time() - last_partial >= 1.5:
+                last_partial = time.time()                      # show the best results so far while the slow shops finish
+                try:
+                    k0, kw0 = queries[0]
+                    early = _partial_rank(kw0, results[k0], cfg)
+                    sig = [(o.url, o.price) for o in early[:40]]
+                    if sum(1 for o in early if o.score >= 30) >= 3 and sig != sent:
+                        sent = sig
+                        partial(early, done, total)
+                except Exception:  # noqa: BLE001
+                    pass
             el = time.time() - t0
             if cut == deadline and total and done >= 0.85 * total and el >= 5:
                 cut = min(deadline, el + max(3.0, el * 0.4))      # most stores are in: don't wait long for the stragglers
@@ -2425,10 +2450,10 @@ WIDEN_BELOW = 3     # fewer relevant listings than this -> also try the shops th
 
 
 def find_offers_many(queries: list[tuple], stores: list[dict], cfg: dict | None = None, progress=None,
-                     deadline: float = 45.0, skip_dead: bool = True) -> dict:
+                     deadline: float = 45.0, skip_dead: bool = True, partial=None) -> dict:
     """One scan on the shops that fit the product. A search that finds almost nothing is automatically
     widened to the remaining shops (only for that search), so unusual products are still found."""
-    out = _find_pass(queries, stores, cfg, progress, deadline, skip_dead)
+    out = _find_pass(queries, stores, cfg, progress, deadline, skip_dead, partial)
     if _cancelled(cfg):
         return out
     if (cfg or {}).get("scope", "smart") == "all" or (cfg or {}).get("widen", "1") == "0":
@@ -2461,9 +2486,10 @@ def find_offers_many(queries: list[tuple], stores: list[dict], cfg: dict | None 
 
 
 def find_offers(keywords: str, stores: list[dict], cfg: dict | None = None, workers: int | None = None,
-                progress=None, deadline: float = 45.0):
-    """Search every store in parallel. Returns (offers ranked by relevance, per-store report)."""
-    return find_offers_many([("q", keywords)], stores, cfg, progress, deadline)["q"]
+                progress=None, deadline: float = 45.0, partial=None):
+    """Search every store in parallel. Returns (offers ranked by relevance, per-store report).
+    `partial(offers, done, total)` is called with the best results so far while slower shops are still answering."""
+    return find_offers_many([("q", keywords)], stores, cfg, progress, deadline, partial=partial)["q"]
 
 
 SAMPLE_QUERY = {"tech": "laptop", "gaming": "controller", "home": "kettle", "diy": "drill", "garden": "mower",
@@ -2807,7 +2833,7 @@ def next_sale_event(now: float | None = None, within: int = 45) -> tuple[str, in
         d = datetime(yr, 11, 1)
         fridays = [d.replace(day=n) for n in range(1, 31) if d.replace(day=n).weekday() == 4]
         bf = fridays[3]                                   # fourth Friday of November
-        found += [("Black Friday", bf), ("Cyber Monday", bf.replace(day=bf.day + 3)),
+        found += [("Black Friday", bf), ("Cyber Monday", bf + timedelta(days=3)),
                   ("Boxing Day sales", datetime(yr, 12, 26)), ("End of financial year sales", datetime(yr, 6, 15)),
                   ("Click Frenzy", datetime(yr, 11, 11))]
     best = None
@@ -2832,6 +2858,116 @@ def buy_hint(price: float | None, reg: float | None, hist_prices: list[float], n
     if reg and price > reg * 1.05:
         return "wait", f"{100 * (price - reg) / reg:.0f}% above its usual price - worth waiting"
     return "ok", "Around its usual price"
+
+
+_DIAG_HIDE = re.compile(r"pass|token|discord|tg_|email|ntfy|smtp|webhook|chat|user|topic|url|key|secret", re.I)
+
+
+def build_diagnostics(data_dir: str | os.PathLike | None = None) -> tuple[str, str]:
+    """Collect what is needed to work out why something is failing and zip it: versions, settings (no passwords,
+    addresses or alert details), every source's status, and the end of the log files. Never includes the watchlist
+    or search history. Returns (zip path, short text summary)."""
+    import zipfile
+    import platform
+    data_dir = Path(data_dir or DB_PATH.parent)
+    con = db()
+    cfg = get_settings(con)
+    safe = {k: v for k, v in sorted(cfg.items()) if not _DIAG_HIDE.search(k)}
+    stores = con.execute("SELECT name, enabled, status, fail_streak, skip_until, tested_at, custom, search_url "
+                         "FROM stores ORDER BY name").fetchall()
+    now = time.time()
+    lines = [f"Deals diagnostics  -  {time.strftime('%Y-%m-%d %H:%M')}",
+             f"version {ENGINE_VERSION}  frozen={FROZEN}  python {platform.python_version()}  {platform.platform()}",
+             f"browser: {browser_status(cfg)}", ""]
+    on = sum(1 for r in stores if r["enabled"])
+    bad = [r for r in stores if r["enabled"] and status_mark(r["status"] or "") == "x"]
+    lines.append(f"sources: {len(stores)} total, {on} on, {len(bad)} of the enabled ones failing")
+    lines.append("")
+    lines.append("FAILING / PAUSED SOURCES")
+    for r in stores:
+        paused = (r["skip_until"] or 0) > now
+        if r in bad or paused:
+            lines.append(f"- {r['name']}{' (custom)' if r['custom'] else ''}: {r['status']}  streak={r['fail_streak']}"
+                         f"{'  PAUSED' if paused else ''}  {r['search_url']}")
+    lines += ["", "SETTINGS (private ones left out)"] + [f"{k} = {v}" for k, v in safe.items()]
+    summary = "\n".join(lines)
+
+    def tail(name, n=250):
+        p = data_dir / name
+        try:
+            return "\n".join(p.read_text(encoding="utf-8", errors="replace").splitlines()[-n:])
+        except OSError:
+            return "(none)"
+    out = data_dir / f"diagnostics-{time.strftime('%Y%m%d-%H%M%S')}.zip"
+    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("summary.txt", summary)
+        z.writestr("all_sources.txt", "\n".join(
+            f"{r['name']}\t{'on' if r['enabled'] else 'off'}\t{r['status']}\t{r['search_url']}" for r in stores))
+        for name in ("deals_error.log", "price_check.log", "image_check.log"):
+            z.writestr(name, tail(name))
+    for old in sorted(data_dir.glob("diagnostics-*.zip"))[:-5]:       # keep only the newest few
+        try:
+            old.unlink()
+        except OSError:
+            pass
+    return str(out), summary
+
+
+def price_pattern(hist: list[dict]) -> dict:
+    """What a product's own history says: its typical price, how often it drops and when it last did."""
+    pts = [(h["t"], h["price"]) for h in hist if h.get("price")]
+    out = {"n": len(pts), "span": 0.0, "drops": []}
+    if len(pts) < 2:
+        return out
+    out["span"] = (pts[-1][0] - pts[0][0]) / 86400
+    for (t0, p0), (t1, p1) in zip(pts, pts[1:]):
+        if p1 <= p0 * 0.95:
+            out["drops"].append((t1, 100 * (p0 - p1) / p0))
+    return out
+
+
+def buy_advice(price: float | None, reg: float | None, hist: list[dict], now: float | None = None,
+               sym: str = "$") -> dict | None:
+    """Wait-or-buy advice from the price history and the sale calendar.
+    {'verdict': 'buy'|'wait'|'fair'|'learning', 'headline', 'detail': [lines], 'basis'}"""
+    if not price:
+        return None
+    now = now or time.time()
+    pat = price_pattern(hist)
+    prices = sorted(h["price"] for h in hist if h.get("price"))
+    n, span = pat["n"], pat["span"]
+    basis = f"based on {n} check{'s' if n != 1 else ''} over {span:.0f} day{'s' if round(span) != 1 else ''}"
+    if n < 3 or span < 5:
+        return {"verdict": "learning", "headline": "Still learning this price",
+                "detail": ["Needs a few more checks over several days before it can say buy or wait."], "basis": basis}
+    lo, hi, med = prices[0], prices[-1], prices[len(prices) // 2]
+    ev = next_sale_event(now)
+    detail, drops = [], pat["drops"]
+    if len(drops) >= 2:
+        gaps = sorted((b[0] - a[0]) / 86400 for a, b in zip(drops, drops[1:]))
+        gap = gaps[len(gaps) // 2]
+        avg = sum(d[1] for d in drops) / len(drops)
+        ago = (now - drops[-1][0]) / 86400
+        line = f"It tends to drop about {avg:.0f}% every {gap:.0f} days (last drop {ago:.0f} days ago)"
+        if gap > ago + 2:
+            line += f" - the next dip may be around {gap - ago:.0f} days away"
+        detail.append(line)
+    if price <= lo * 1.01 and hi > price * 1.03:
+        return {"verdict": "buy", "headline": "Buy now",
+                "detail": [f"The lowest price tracked so far (it has been up to {money(sym, hi)})"] + detail, "basis": basis}
+    if reg and price <= reg * 0.85:
+        return {"verdict": "buy", "headline": "Buy now",
+                "detail": [f"{100 * (reg - price) / reg:.0f}% below its usual price"] + detail, "basis": basis}
+    if ev and price >= med * 0.97:
+        return {"verdict": "wait", "headline": "Wait",
+                "detail": [f"{ev[0]} is {ev[1]} day{'s' if ev[1] != 1 else ''} away and it may drop further"] + detail,
+                "basis": basis}
+    if price > med * 1.05:
+        return {"verdict": "wait", "headline": "Wait",
+                "detail": [f"{100 * (price - med) / med:.0f}% above its typical price ({money(sym, med)}); it has been as low as {money(sym, lo)}"]
+                + detail, "basis": basis}
+    return {"verdict": "fair", "headline": "Fair price",
+            "detail": [f"Close to its typical price ({money(sym, med)})"] + detail, "basis": basis}
 
 
 def price_match_text(title: str, cheaper: Offer, my_store: str, sym: str = "$") -> str:
@@ -4448,11 +4584,77 @@ def _product_node(n):
     return None
 
 
+_GTIN_RE = re.compile(r'"(?:gtin\d*|ean|upc|barcode|isbn)"\s*:\s*"?(\d{8,14})', re.I)
+_MPN_RE = re.compile(r'"mpn"\s*:\s*"([^"]{3,40})"', re.I)
+_ITEMPROP_RE = re.compile(r'itemprop=["\'](gtin\d*|mpn)["\'][^>]*?content=["\']([^"\']{3,40})["\']', re.I)
+
+
+def page_codes(page: str) -> dict:
+    """Barcodes (GTIN/EAN/UPC) and manufacturer part numbers found in a product page's markup."""
+    gt, mp = set(), set()
+    for m in _GTIN_RE.finditer(page):
+        gt.add(m.group(1).lstrip("0"))
+    for m in _MPN_RE.finditer(page):
+        mp.add(norm(m.group(1)))
+    for kind, val in _ITEMPROP_RE.findall(page):
+        if kind.lower().startswith("gtin"):
+            if val.strip().isdigit():
+                gt.add(val.strip().lstrip("0"))
+        else:
+            mp.add(norm(val))
+    return {"gtin": {g for g in gt if len(g) >= 8}, "mpn": {m for m in mp if len(m) >= 4}}
+
+
+def same_product(a: dict, b: dict) -> str:
+    """'exact' (shared barcode or part number), 'different' (both have codes and they disagree) or '' (can't tell)."""
+    if a["gtin"] and b["gtin"]:
+        return "exact" if a["gtin"] & b["gtin"] else "different"
+    if a["mpn"] and b["mpn"]:
+        if a["mpn"] & b["mpn"] or any(x in y or y in x for x in a["mpn"] for y in b["mpn"]):
+            return "exact"
+        return "different"
+    return ""
+
+
+def match_link_offers(info: dict, offers: list[Offer], limit: int = 10, budget: float = 14.0) -> int:
+    """Pasted-link search: confirm which results really are the same product. Uses the part number in the
+    result's title where it has one, otherwise opens the cheapest few result pages and compares barcodes /
+    part numbers. Sets Offer.match and returns how many were found to be a different model."""
+    mine = info.get("codes") or {"gtin": set(), "mpn": set()}
+    mpns = {m for m in mine["mpn"] if len(m) >= 5}
+    cands = sorted((o for o in offers if o.source == "store" and not o.accessory and o.score >= 30), key=lambda o: o.price)
+    todo = []
+    for o in cands[:limit * 2]:
+        t = norm(o.title)
+        if any(m in t for m in mpns):
+            o.match = "exact"
+        elif len(todo) < limit and (mine["gtin"] or mine["mpn"]):
+            todo.append(o)
+    if todo:
+        def look(o):
+            try:
+                return o, page_codes(fetch(o.url, timeout=(4, 6)))
+            except Exception:  # noqa: BLE001
+                return o, None
+        ex = ThreadPoolExecutor(max_workers=4)
+        futs = [ex.submit(look, o) for o in todo]
+        try:
+            for fut in as_completed(futs, timeout=budget):
+                o, codes = fut.result()
+                if codes:
+                    o.match = same_product(mine, codes)
+        except Exception:  # noqa: BLE001
+            pass
+        finally:
+            ex.shutdown(wait=False, cancel_futures=True)
+    return sum(1 for o in offers if o.match == "different")
+
+
 def parse_product_page(page: str, url: str) -> dict:
     """Best-effort: {'title','price','was','brand','model','image'} from a product page."""
     soup = make_soup(page)
     info = {"title": None, "price": None, "was": None, "brand": None, "model": None, "image": None,
-            "url": url, "store": _store_name_for(url)}
+            "url": url, "store": _store_name_for(url), "codes": page_codes(page)}
     node = None
     for tag in soup.find_all("script", type="application/ld+json"):
         try:

@@ -157,7 +157,7 @@ def ensure_deps():
 ensure_deps()
 import engine as E  # noqa: E402
 
-if getattr(E, "ENGINE_VERSION", 0) < 58:
+if getattr(E, "ENGINE_VERSION", 0) < 59:
     _r = tk.Tk()
     _r.withdraw()
     messagebox.showerror("Deals", "engine.py is out of date.\n\nReplace it with the new engine.py from the "
@@ -858,6 +858,8 @@ class Card(tk.Canvas):
             meta.append("out of stock")
         if o.used:
             meta.append("refurbished / used")
+        if o.match == "exact":
+            meta.append("\u2713 same product")
         if o.others:
             meta.append(f"+{len(o.others)} more store{'s' if len(o.others) > 1 else ''} from "
                         f"{E.money(sym, min(x.price for x in o.others))}")
@@ -1110,9 +1112,7 @@ class HistoryDialog(tk.Toplevel):
                       font=app.f_small).pack(anchor="w", padx=12)
         Chart(app, self, [h["price"] for h in hist], height=110,
               lines=[(item["max_price"], "target"), (reg[0] if reg else None, "usual")]).pack(fill="x", padx=12, pady=8)
-        tone, tip = E.buy_hint(item["best_price"], reg[0] if reg else None, [h["price"] for h in hist])
-        if tip and item["best_price"]:
-            app.label(self, tip, "accent" if tone == "good" else "text", font=app.f_small_b).pack(anchor="w", padx=12)
+        app.advice_lines(self, E.buy_advice(item["best_price"], reg[0] if reg else None, hist, sym=sym), 560, padx=12)
         app.frame(self, "line", height=1).pack(fill="x")
         sf = ScrollFrame(app, self)
         sf.outer.pack(fill="both", expand=True)
@@ -1284,6 +1284,7 @@ class App(tk.Tk):
         self.q = queue.Queue()
         self.tray, self._tray_told, self.tray_close = None, False, False
         self._testing_all, self._test_prog = False, None
+        self._stream, self._stream_sig, self._dev_clicks, self._dev_t = False, None, 0, 0.0
         self.progs = []                                   # running progress cards (so a hidden one can be brought back)
         self._err_count = 0
         self.reg_list, self.scrollers = [], {}
@@ -1561,7 +1562,7 @@ class App(tk.Tk):
                       ("fair use and privacy", lambda: messagebox.showinfo("Fair use and privacy", TERMS)),
                       ("open error log", self.open_error_log), ("run self-check", self.run_selftest),
                       ("check for updates...", self.check_updates),
-                      ("about", lambda: messagebox.showinfo("About", f"Deals  -  version {E.ENGINE_VERSION}\nAustralian deal finder."))]),
+                      ("about", self.open_about)]),
         ]
         for i, (name, items) in enumerate(reversed(menus)):
             Pop(self, top, name, items, pad=(11, 5), style="ghost").pack(side="right", padx=(0, 2))
@@ -1665,6 +1666,37 @@ class App(tk.Tk):
         if self.searching and total:
             self.load_sub.configure(text=f"{done} of {total} sources checked")
             self.load_bar.set(done / total)
+            if self._stream:
+                self.info_var.set(f"Still searching - {done} of {total} sources answered. These are the best results so far.")
+
+    def on_search_partial(self, offers, done, total, query):
+        """The first good results appear while slower shops are still answering."""
+        if not self.searching or self.view != "results" or query != self.query:
+            return
+        sig = [(o.url, o.price) for o in offers[:PAGE]]
+        first = not self._stream
+        self._stream = True
+        self.info_var.set(f"Still searching - {done} of {total} sources answered. These are the best results so far.")
+        if sig == self._stream_sig:
+            return
+        if not first:
+            try:
+                if self.res.canvas.yview()[0] > 0.02:          # the person is scrolling: don't move things under them
+                    return
+            except tk.TclError:
+                return
+        self._stream_sig = sig
+        self.results_all, self.shown = offers, PAGE
+        self.hist = getattr(self, "hist", None) or {}
+        try:
+            self.prev_prices = E.last_prices(E.db(), [o.url for o in offers])
+        except Exception:  # noqa: BLE001
+            self.prev_prices = {}
+        self.apply_group()
+        if first:
+            self.hide_loading()
+            self.res.outer.pack(fill="both", expand=True)
+        self.render_results()
 
     def win_button(self, parent, kind, cmd, danger=False):
         """A minimise / maximise / close button for the custom window frame (Windows' own icon font when available)."""
@@ -2429,13 +2461,15 @@ class App(tk.Tk):
                 log_error(traceback.format_exc())
                 run_q = q
         self.searching, self.query = True, run_q
+        self._stream, self._stream_sig = False, None
         self.set_status(f"searching {len(stores)} sources...")
         self.show_loading(len(stores))
 
         def work():
             try:
                 prog = lambda d, t: self.q.put(lambda d=d, t=t: self.on_search_progress(d, t))
-                offers, report = E.find_offers(run_q, stores, cfg, progress=prog)
+                part = lambda offs, d, t: self.q.put(lambda offs=offs, d=d, t=t: self.on_search_partial(offs, d, t, run_q))
+                offers, report = E.find_offers(run_q, stores, cfg, progress=prog, partial=part)
                 if not offers and not exact:                    # nothing found: try a more forgiving spelling fix
                     q2, ch = E.correct_query(run_q, aggressive=True)
                     if not ch or q2 == run_q:                   # or borrow the spelling the shops' own results use
@@ -2480,6 +2514,13 @@ class App(tk.Tk):
             try:
                 prog = lambda d, t: self.q.put(lambda d=d, t=t: self.on_search_progress(d, t))
                 offers, report = E.find_offers(info["query"], stores, cfg, progress=prog)
+                self.q.put(lambda: self.load_sub.configure(text="Checking which results are the exact same product..."))
+                try:
+                    info["different"] = E.match_link_offers(info, offers)
+                    offers = [o for o in offers if o.match != "different"]
+                except Exception:  # noqa: BLE001
+                    log_error(traceback.format_exc())
+                    info["different"] = 0
                 self.q.put(lambda: self.link_done(info, offers, report))
             except Exception:  # noqa: BLE001
                 log_error(traceback.format_exc())
@@ -2502,6 +2543,13 @@ class App(tk.Tk):
 
     def show_results(self, offers, report):
         self.searching = False
+        was_streaming, self._stream = self._stream, False
+        keep = 0.0
+        if was_streaming:
+            try:
+                keep = self.res.canvas.yview()[0]
+            except tk.TclError:
+                keep = 0.0
         self.hide_loading()
         self.results_all, self.shown = offers, PAGE
         self.apply_group()
@@ -2538,6 +2586,8 @@ class App(tk.Tk):
         if self.view == "results":
             self.res.outer.pack(fill="both", expand=True)
         self.render_results()
+        if keep > 0.02:
+            self.after(60, lambda: self.res.canvas.yview_moveto(keep))
 
     def section(self, parent, text, accent):
         self.label(parent, text, "accent" if accent else "muted", font=self.f_small_b).pack(
@@ -2663,6 +2713,11 @@ class App(tk.Tk):
         box.pack(fill="x", padx=16, pady=(10, 2))
         title = li["title"] if len(li["title"]) < 90 else li["title"][:87] + "..."
         self.label(box, f"Your link:  {title}", "text", font=self.f_small_b, wraplength=900, justify="left").pack(anchor="w")
+        same = sum(1 for o in self.results_all if o.match == "exact")
+        if same or li.get("different"):
+            bits = ([f"{same} confirmed as the same product by barcode or model code"] if same else []) + \
+                   ([f"{li['different']} different models left out"] if li.get("different") else [])
+            self.label(box, "\u2713 " + "  \u00b7  ".join(bits), "muted", font=self.f_small).pack(anchor="w")
         if price:
             self.label(box, f"{li['store']} sells it for {E.money(sym, price)}", "muted", font=self.f_small).pack(anchor="w")
             if cheaper:
@@ -3365,11 +3420,7 @@ class App(tk.Tk):
             self.label(mid, line, tone, font=self.f_small).pack(anchor="w")
         elif hist:
             self.label(mid, "Usual price: learning - needs a few more checks", "muted", font=self.f_small).pack(anchor="w")
-        tone, tip = E.buy_hint(r["best_price"], reg[0] if reg else None, [h["price"] for h in hist])
-        if tip and r["best_price"]:
-            self.label(mid, ("\u2713 " if tone == "good" else "\u23f3 " if tone == "wait" else "") + tip,
-                       "accent" if tone == "good" else "text" if tone == "wait" else "muted", font=self.f_small_b if tone != "ok" else self.f_small,
-                       wraplength=520, justify="left").pack(anchor="w")
+        self.advice_lines(mid, E.buy_advice(r["best_price"], reg[0] if reg else None, hist, sym=sym), 520)
         right = self.frame(row)
         right.grid(row=0, column=4, sticky="ne")
         if r["best_url"]:
@@ -3385,6 +3436,111 @@ class App(tk.Tk):
                     font=self.f_small).pack(anchor="e")
         self.button(right, "Remove", lambda i=r["id"]: self.remove_item(i), pad=(14, 4), style="ghost",
                     font=self.f_small).pack(anchor="e")
+
+    # ------------------------------------------------------------ about / dev --
+    def dev_mode(self):
+        return E.get_settings(E.db()).get("dev_mode", "0") == "1"
+
+    def open_about(self):
+        win = tk.Toplevel(self)
+        win.title("About")
+        win.transient(self)
+        win.resizable(False, False)
+        self.reg(win, "window")
+        body = self.frame(win)
+        body.pack(padx=28, pady=22)
+        self.label(body, "Deals", font=self.f_page).pack(anchor="w")
+        self.label(body, "Australian deal finder.", "muted").pack(anchor="w", pady=(2, 10))
+        ver = self.label(body, f"Version {E.ENGINE_VERSION}", "muted", font=self.f_small)
+        ver.pack(anchor="w")
+        dev = self.frame(body)
+        self.label(body, "Prices are read automatically - always check the shop before you buy.",
+                   "muted", font=self.f_small, wraplength=360, justify="left").pack(anchor="w", pady=(10, 0))
+
+        def build_dev():
+            for w in dev.winfo_children():
+                w.destroy()
+            if not self.dev_mode():
+                dev.pack_forget()
+                return
+            dev.pack(anchor="w", fill="x", pady=(16, 0), after=ver)
+            self.label(dev, "Developer mode is on", "accent", font=self.f_small_b).pack(anchor="w")
+            self.label(dev, "Creates a zip of the source list, their status and the error logs (no passwords, alert "
+                       "details, watchlist or searches), copies a short summary to the clipboard and shows the file.",
+                       "muted", font=self.f_small, wraplength=360, justify="left").pack(anchor="w", pady=(2, 8))
+            row = self.frame(dev)
+            row.pack(anchor="w")
+            self.button(row, "Send diagnostics", lambda: self.make_diagnostics(win), pad=(14, 5)).pack(side="left")
+            self.button(row, "Turn off", lambda: (self.set_dev_mode(False), build_dev()), pad=(14, 5),
+                        style="ghost").pack(side="left", padx=(6, 0))
+
+        def tap(_e=None):
+            now = time.time()
+            self._dev_clicks = self._dev_clicks + 1 if now - self._dev_t < 2.0 else 1
+            self._dev_t = now
+            if self.dev_mode():
+                return
+            if self._dev_clicks >= 10:
+                self._dev_clicks = 0
+                self.set_dev_mode(True)
+                build_dev()
+            elif self._dev_clicks >= 6:
+                ver.configure(text=f"Version {E.ENGINE_VERSION}   ({10 - self._dev_clicks} more...)")
+        ver.bind("<Button-1>", tap)
+        build_dev()
+        self.button(body, "close", win.destroy, pad=(14, 5), style="ghost").pack(anchor="e", pady=(16, 0))
+        win.update_idletasks()
+        win.geometry(f"+{self.winfo_rootx() + px(160)}+{self.winfo_rooty() + px(120)}")
+
+    def set_dev_mode(self, on):
+        E.set_setting(E.db(), "dev_mode", "1" if on else "0")
+        self.set_status("developer mode " + ("on" if on else "off"))
+
+    def make_diagnostics(self, parent):
+        self.set_status("collecting diagnostics...")
+
+        def work():
+            try:
+                path, summary = E.build_diagnostics()
+                err = ""
+            except Exception:  # noqa: BLE001
+                log_error(traceback.format_exc())
+                path, summary, err = "", "", "could not build the diagnostics file - see deals_error.log"
+
+            def finish():
+                if err:
+                    self.set_status(err)
+                    return messagebox.showinfo("diagnostics", err)
+                try:
+                    self.clipboard_clear()
+                    self.clipboard_append(summary)
+                except tk.TclError:
+                    pass
+                try:
+                    if sys.platform == "win32":
+                        subprocess.Popen(["explorer", "/select,", os.path.normpath(path)])
+                    else:
+                        webbrowser.open("file://" + os.path.dirname(path))
+                except Exception:  # noqa: BLE001
+                    pass
+                self.set_status("diagnostics saved")
+                messagebox.showinfo("diagnostics", "Saved, and a short summary is copied to your clipboard.\n\n"
+                                    f"Attach this file in the chat:\n{path}")
+            self.q.put(finish)
+        threading.Thread(target=work, daemon=True).start()
+
+    def advice_lines(self, parent, adv, wrap, padx=0):
+        """The wait-or-buy verdict, what it is based on and what the item's own history says."""
+        if not adv:
+            return
+        v = adv["verdict"]
+        mark = {"buy": "\u2713 ", "wait": "\u23f3 ", "fair": "", "learning": ""}[v]
+        tone = {"buy": "accent", "wait": "text", "fair": "muted", "learning": "muted"}[v]
+        self.label(parent, f"{mark}{adv['headline']}", tone, font=self.f_small_b if v in ("buy", "wait") else self.f_small
+                   ).pack(anchor="w", padx=padx, pady=(6, 0))
+        for line in adv["detail"]:
+            self.label(parent, line, "muted", font=self.f_small, wraplength=wrap, justify="left").pack(anchor="w", padx=padx)
+        self.label(parent, adv["basis"], "muted", font=self.f_small).pack(anchor="w", padx=padx)
 
     # -------------------------------------------------------------- watchlist --
     def item_form(self, title, row=None, prefill=""):
