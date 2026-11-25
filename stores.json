@@ -1,5 +1,5 @@
 {
-  "version": 4,
+  "version": 5,
   "stores": [
     {"name": "StaticICE (200+ AU stores)", "url": "https://www.staticice.com.au/cgi-bin/search.cgi?q={query}&spos=3", "cats": ["all"], "enabled": true},
     {"name": "Amazon AU", "url": "https://www.amazon.com.au/s?k={query}", "cats": ["general"], "enabled": true},
@@ -190,6 +190,7 @@
     {"name": "Price Hipster", "url": "https://pricehipster.com/search?q={query}", "cats": ["all"], "browser": false, "enabled": false, "note": "New price-comparison site: search address is a best guess - press Test, then Repair if it fails, then switch on"},
     {"name": "Snipe", "url": "https://snipeit.com.au/search?q={query}", "cats": ["tech"], "browser": false, "enabled": false, "note": "New price-comparison site: search address is a best guess - press Test, then Repair if it fails, then switch on"},
     {"name": "ShopBot", "url": "https://www.shopbot.com.au/search?q={query}", "cats": ["all"], "browser": false, "enabled": false, "note": "New price-comparison site: search address is a best guess - press Test, then Repair if it fails, then switch on"},
-    {"name": "Whatscheap", "url": "https://whatscheap.com.au/search?q={query}", "cats": ["all"], "browser": false, "enabled": false, "note": "New price-comparison site: search address is a best guess - press Test, then Repair if it fails, then switch on"}
+    {"name": "Whatscheap", "url": "https://whatscheap.com.au/search?q={query}", "cats": ["all"], "browser": false, "enabled": false, "note": "New price-comparison site: search address is a best guess - press Test, then Repair if it fails, then switch on"},
+    {"name": "SIHOO AU", "url": "https://sihoo.com.au/search?q={query}", "cats": ["general"], "browser": false, "enabled": true}
   ]
 }

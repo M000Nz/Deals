@@ -37,7 +37,7 @@ from urllib.parse import parse_qs, quote, quote_plus, unquote, urlencode, urljoi
 import requests
 from bs4 import BeautifulSoup
 
-ENGINE_VERSION = 88
+ENGINE_VERSION = 89
 GITHUB_REPO = "M000Nz/Deals"
 GITHUB_API = "https://api.github.com"
 FROZEN = bool(getattr(sys, "frozen", False))                  # True when running as the packaged Deals.exe
@@ -1895,6 +1895,54 @@ def _amazon_offers(soup, base_url: str) -> list[Offer]:
 
 AMAZON_STATS: dict = {}
 
+# Shops built on Shopify draw their search results with JavaScript, so the page looks empty. Shopify also gives every
+# shop two plain data feeds (search suggestions and the full product list) - read those instead.
+SHOPIFY_HOSTS = {"sihoo.com.au"}
+
+
+def _shopify_offers(store: dict, base: str, query: str) -> list[Offer]:
+    from urllib.parse import urlparse
+    root = f"https://{urlparse(base).hostname}"
+    name, out = store["name"], []
+
+    def add(title, vendor, handle, price, was, image, avail):
+        p = parse_price(str(price)) if price not in (None, "") else None
+        if not title or not p or p <= 0:
+            return
+        if vendor and vendor.lower() not in title.lower():
+            title = f"{vendor} {title}"                # "M57 Pro Ergonomic Office Chair" -> "SIHOO M57 Pro ..."
+        w = parse_price(str(was)) if was not in (None, "", "0", 0, "0.00") else None
+        if w is not None and w <= p * 1.02:
+            w = None
+        if isinstance(image, dict):
+            image = image.get("src") or image.get("url")
+        if isinstance(image, str) and image.startswith("//"):
+            image = "https:" + image
+        out.append(Offer(name, title, p, f"{root}/products/{handle}", w, image=image or None, oos=avail is False))
+
+    try:
+        data = json.loads(fetch(f"{root}/search/suggest.json?q={quote_plus(query)}&resources[type]=product&resources[limit]=10",
+                                accept="application/json"))
+        for pr in ((data.get("resources") or {}).get("results") or {}).get("products") or []:
+            handle = pr.get("handle") or str(pr.get("url", "")).split("/products/")[-1].split("?")[0]
+            add(pr.get("title"), pr.get("vendor"), handle, pr.get("price"), pr.get("compare_at_price_max") or pr.get("compare_at_price"),
+                pr.get("featured_image") or pr.get("image"), pr.get("available"))
+    except (FetchError, ValueError, AttributeError):
+        out = []
+    if out:
+        return out
+    data = json.loads(fetch(f"{root}/products.json?limit=250", accept="application/json"))     # small shops: the whole range
+    for pr in data.get("products") or []:
+        vs = [v for v in pr.get("variants") or [] if parse_price(str(v.get("price"))) ]
+        if not vs:
+            continue
+        ok = [v for v in vs if v.get("available")] or vs
+        v = min(ok, key=lambda x: parse_price(str(x.get("price"))))
+        imgs = pr.get("images") or []
+        add(pr.get("title"), pr.get("vendor"), pr.get("handle"), v.get("price"), v.get("compare_at_price"),
+            imgs[0] if imgs else None, bool(v.get("available")))
+    return out
+
 
 def _parse_store_page(page: str, url: str, store: dict) -> list[Offer]:
     soup = make_soup(page)
@@ -1916,6 +1964,9 @@ def scrape_store(store: dict, query: str, cfg: dict | None = None, full: str | N
     if tpl.startswith("ozb:"):
         _step("Reading the OzBargain feed")
         return scrape_ozb(store, query, full)
+    if any(h in tpl for h in SHOPIFY_HOSTS):
+        _step("Reading the shop's product list")
+        return _shopify_offers(store, tpl, full or query)
     if "staticice." in tpl:
         _step("Loading the price-comparison results")
         inc, exc = parse_keywords(full or query)
