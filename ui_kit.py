@@ -133,7 +133,8 @@ def _resample():
 
 def _remember(key, photo):
     if len(_CACHE) > 800:
-        _CACHE.clear()
+        for k in list(_CACHE)[:400]:          # drop the oldest half, not everything (clearing it all made the UI stutter)
+            _CACHE.pop(k, None)
     _CACHE[key] = photo
     return photo
 
@@ -1134,10 +1135,23 @@ class Chart:
         self.app, self.points = app, points
         self.lines = [(v, k) for v, k in lines if v]          # [(price, 'target' | 'usual')] dashed guides
         self.cv = app.reg(tk.Canvas(parent, height=px(height), bd=0, highlightthickness=0), "canvas")
-        self.cv.bind("<Configure>", lambda e: self.draw(e.width, e.height))
+        self._job, self._size = None, None
+        self.cv.bind("<Configure>", self._resized)
         if on_click:
             self.cv.bind("<Button-1>", lambda e: on_click())
             self.cv.configure(cursor="hand2")
+
+    def _resized(self, e):
+        """Redraw once the size settles, not on every pixel of a resize, and never for an unchanged size."""
+        if (e.width, e.height) == self._size:
+            return
+        self._size = (e.width, e.height)
+        if self._job:
+            try:
+                self.cv.after_cancel(self._job)
+            except Exception:  # noqa: BLE001
+                pass
+        self._job = self.cv.after(60, lambda: self.draw(*self._size))
 
     def pack(self, **kw):
         self.cv.pack(**kw)

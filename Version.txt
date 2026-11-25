@@ -1,5 +1,7 @@
-65
+66
 https://github.com/M000Nz/Deals
+note: Lighter and smoother: the database is now set up once instead of on every call, product-review checks fetch fewer pages at a time, live results redraw at most every few seconds, graphs redraw only when resized, and the picture cache no longer empties all at once
+note: New 'Why these results?' button under a search shows which shops answered, how many listings came back and what was filtered; the same report goes into diagnostics (last_search.txt)
 note: New Alerts window: plain step-by-step instructions for the phone (ntfy), Discord, Telegram and email options, a button that makes you a private phone name, and a Send a test button on each that tells you if it worked or why not
 note: Daily digest 'Send a test now' now shows a progress card, explains when it can't run, and is faster
 note: For you: Find more now replaces the whole page with fresh suggestions (nothing piles up), and never repeats ones you were already shown
