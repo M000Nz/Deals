@@ -37,7 +37,7 @@ from urllib.parse import parse_qs, quote, quote_plus, unquote, urlencode, urljoi
 import requests
 from bs4 import BeautifulSoup
 
-ENGINE_VERSION = 60
+ENGINE_VERSION = 61
 GITHUB_REPO = "M000Nz/Deals"
 GITHUB_API = "https://api.github.com"
 FROZEN = bool(getattr(sys, "frozen", False))                  # True when running as the packaged Deals.exe
@@ -1655,12 +1655,27 @@ def clean_coupon(v: str | None) -> str:
     return v.upper() if v.isupper() or v.islower() else v
 
 
-def _meta_coupon(meta: dict) -> str:
-    for k, v in meta.items():
-        if "coupon" in k.lower() or k.lower() in ("code", "promo-code", "promocode"):
-            c = clean_coupon(v)
-            if c:
-                return c
+_CODE_IN_TEXT = re.compile(r"(?i:\b(?:promo|coupon|discount|voucher)?\s*code)s?\s*[:\-]?\s*[\"'\u201c]?([A-Z0-9][A-Z0-9_\-]{3,19})\b")
+_CODE_STOP = {"FREE", "ONLY", "FOR", "AND", "THE", "USED", "WITH", "ONLINE", "INSTORE", "NONE", "TBC", "TBA", "AUTO", "APPLIED",
+              "AUTOMATIC", "NEEDED", "REQUIRED", "THIS", "THAT", "FROM", "WILL", "WHEN", "HERE", "BELOW", "ABOVE", "DEAL", "SALE",
+              "OFF", "EXPIRES", "EXPIRED", "ENDS", "NOTE", "NEW", "ALL"}
+_NOT_A_CODE = re.compile(r"(?i)gift\s*card|giftcard|e-?gift|prezzee|cash\s*back|cashback|points|\d%\s*back|bank|credit card|"
+                         r"visa|mastercard|paypal|afterpay|zip pay")
+
+
+def text_coupon(title: str, desc: str = "") -> str:
+    """A discount code the post itself states, e.g. 'with code SAVE10'. Nothing is returned when the text mentions
+    gift cards, cashback or card/bank offers, or when no clear code follows the word 'code'."""
+    plain = re.sub(r"<[^>]+>", " ", _html.unescape(f"{title} {desc}"))
+    if _NOT_A_CODE.search(plain):
+        return ""
+    for m in _CODE_IN_TEXT.finditer(plain):
+        c = m.group(1)
+        if c in _CODE_STOP or not _CODE_OK.match(c):
+            continue
+        if not any(ch.isdigit() for ch in c) and len(c) < 6:
+            continue
+        return c
     return ""
 
 
@@ -1673,7 +1688,7 @@ def parse_ozb_feed(xml_text: str, now: float | None = None) -> list[Offer]:
         return []
     out: list[Offer] = []
     for item in root.iter("item"):
-        title = link = ""
+        title = link = desc = ""
         meta: dict = {}
         expired, image = False, None
         for ch in item:
@@ -1682,6 +1697,8 @@ def parse_ozb_feed(xml_text: str, now: float | None = None) -> list[Offer]:
                 title = _html.unescape((ch.text or "").strip())
             elif ln == "link":
                 link = (ch.text or "").strip()
+            elif ln == "description":
+                desc = ch.text or ""
             elif ln == "meta":
                 meta = dict(ch.attrib)
             elif ln == "title-msg" and ch.attrib.get("type") == "expired":
@@ -1708,7 +1725,7 @@ def parse_ozb_feed(xml_text: str, now: float | None = None) -> list[Offer]:
             votes = 0
         out.append(Offer(store, title, price, link, was if was and was > price else None,
                          image=meta.get("image") or image, expires=expiry, votes=votes, source="ozb",
-                         coupon=_meta_coupon(meta)))
+                         coupon=text_coupon(title, desc)))
     return out
 
 
@@ -2885,7 +2902,8 @@ def buy_hint(price: float | None, reg: float | None, hist_prices: list[float], n
     return "ok", "Around its usual price"
 
 
-_DIAG_HIDE = re.compile(r"pass|token|discord|tg_|email|ntfy|smtp|webhook|chat|user|topic|url|key|secret", re.I)
+_DIAG_HIDE = re.compile(r"pass|token|discord|tg_|email|ntfy|smtp|webhook|chat|user|topic|url|key|secret|"
+                        r"recent|viewed|foryou|daily_cat|folder|search|seen|geometry", re.I)
 
 
 def build_diagnostics(data_dir: str | os.PathLike | None = None) -> tuple[str, str]:

@@ -1,5 +1,6 @@
-60
+61
 https://github.com/M000Nz/Deals
+note: Discount codes are now read from the wording of OzBargain posts (e.g. 'use code SAVE10'); gift-card, cashback and bank offers are still never shown
 note: OzBargain results now show a real discount code and its end date when the post lists one (gift-card, cashback and bank offers are never shown). Turn off in Settings > coupon codes
 note: Results appear as soon as the first shops answer, and keep improving while slower shops finish (no more waiting for the slowest one)
 note: Pasted links: results are checked against the product's barcode or model code - confirmed matches show 'same product' and different models are left out
