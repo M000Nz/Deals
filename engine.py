@@ -37,7 +37,7 @@ from urllib.parse import parse_qs, quote, quote_plus, unquote, urlencode, urljoi
 import requests
 from bs4 import BeautifulSoup
 
-ENGINE_VERSION = 76
+ENGINE_VERSION = 77
 GITHUB_REPO = "M000Nz/Deals"
 GITHUB_API = "https://api.github.com"
 FROZEN = bool(getattr(sys, "frozen", False))                  # True when running as the packaged Deals.exe
@@ -2347,6 +2347,7 @@ class Report(list):
     hidden = 0     # from sites you've chosen to hide (eBay by default)
     widened = False  # a thin search was automatically widened to every shop
     words: dict = {}  # word -> how many listings (before filtering) used it
+    hidden_offers: list = []   # (offer, reason) for listings kept out of the results: "reported" | "site" | "cheap"
 
 
 def blocked_words(cfg: dict | None) -> list[str]:
@@ -2593,13 +2594,23 @@ def _find_pass(queries: list[tuple], stores: list[dict], cfg: dict | None = None
         hid = hidden_url_set(con)
         for o in raw:
             o.used = o.used or bool(USED_RE.search(o.title)) or o.store in USED_ONLY_STORES
-        visible = [o for o in raw if not is_hidden_offer(o, words) and o.url not in hid]
+        visible, hidden_list = [], []
+        for o in raw:                                    # keep what was left out, so "Show hidden listings" can bring it back
+            if o.url in hid:
+                hidden_list.append((o, "reported"))
+            elif is_hidden_offer(o, words):
+                hidden_list.append((o, "site"))
+            else:
+                visible.append(o)
         if (cfg or {}).get("defer_verify") != "1":      # the app checks prices after the results are on screen instead
             try:
                 verify_store_prices(visible, cfg=cfg)
             except Exception:  # noqa: BLE001
                 pass
-        ranked, junk = drop_junk_prices(rank_offers(kw, visible))
+        ranked0 = rank_offers(kw, visible)
+        ranked, junk = drop_junk_prices(ranked0)
+        kept_ids = {id(o) for o in ranked}
+        hidden_list += [(o, "cheap") for o in ranked0 if id(o) not in kept_ids]
         ranked = apply_ozb_discount(ranked)
         try:
             record_seen(con, [o for o in ranked if o.source != "ozb" and o.score >= 30][:250])
@@ -2613,6 +2624,12 @@ def _find_pass(queries: list[tuple], stores: list[dict], cfg: dict | None = None
         report.extend({"id": st["id"], "name": st["name"], "status": "Too slow - skipped this time",
                        "raw": 0, "err": "timeout"} for st in late[k])
         report.junk, report.hidden = junk, len(raw) - len(visible)
+        seen_u, uniq = set(), []
+        for o, why in hidden_list:
+            if o.url not in seen_u and len(uniq) < 80:
+                seen_u.add(o.url)
+                uniq.append((o, why))
+        report.hidden_offers = uniq
         report.words = {}
         for o in raw[:800]:                         # words the shops' own search found - used for "did you mean"
             for w in set(re.findall(r"[a-z]{4,}", o.title.lower())):
@@ -2705,6 +2722,8 @@ def find_offers_many(queries: list[tuple], stores: list[dict], cfg: dict | None 
             rep.extend(rep2)
             rep.junk += rep2.junk
             rep.hidden += rep2.hidden
+            rep.hidden_offers = list(rep.hidden_offers) + [(o, w) for o, w in rep2.hidden_offers
+                                                           if o.url not in {x.url for x, _ in rep.hidden_offers}]
             rep.timed_out += rep2.timed_out
             rep.skipped = 0
             rep.widened = True

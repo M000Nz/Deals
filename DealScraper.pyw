@@ -157,7 +157,7 @@ def ensure_deps():
 ensure_deps()
 import engine as E  # noqa: E402
 
-if getattr(E, "ENGINE_VERSION", 0) < 76:
+if getattr(E, "ENGINE_VERSION", 0) < 77:
     _r = tk.Tk()
     _r.withdraw()
     messagebox.showerror("Deals", "engine.py is out of date.\n\nReplace it with the new engine.py from the "
@@ -1514,6 +1514,7 @@ class App(tk.Tk):
         self._stream, self._stream_sig, self._dev_clicks, self._dev_t = False, None, 0, 0.0
         self._digest_busy, self._ml_busy, self._ml_pending = False, False, []
         self._pc_busy, self._pc_base, self._pc_dots = None, "", 0
+        self.show_hidden, self.hidden_offers = False, []      # "Show hidden listings" at the bottom of the results
         self._sgen, self._scancel = 0, None               # which search is current, and how to stop the one before
         self.progs = []                                   # running progress cards (so a hidden one can be brought back)
         self._err_count = 0
@@ -2704,6 +2705,7 @@ class App(tk.Tk):
                 run_q = q
         self.searching, self.query = True, run_q
         self._stream, self._stream_sig = False, None
+        self.hidden_offers, self.show_hidden = [], False
         self.set_status(f"searching {len(stores)} sources...")
         self.show_loading(len(stores))
 
@@ -2819,6 +2821,8 @@ class App(tk.Tk):
                 keep = 0.0
         self.hide_loading()
         self.results_all, self.shown = offers, PAGE
+        self.show_hidden = False
+        self.hidden_offers = list(getattr(report, "hidden_offers", []) or [])
         self.apply_group()
         try:
             self.hist = E.history_stats(E.db(), [o.url for o in offers[:300]])
@@ -3008,6 +3012,7 @@ class App(tk.Tk):
         left = len(deals) + len(others) - self.shown
         if left > 0:
             self.button(inner, f"Show more ({left} left)", self.more, pad=(16, 5)).pack(pady=12)
+        self.hidden_section(inner, sym)
         if HAS_PIL:
             self.load_thumbs(list(self.thumb_targets))
         if self.rev_hidden:
@@ -3015,6 +3020,44 @@ class App(tk.Tk):
                 anchor="w", padx=16, pady=(0, 8))
         if self.rev_mode != "Off" and not self.rev_busy and any(o.url not in self.rev_info for o in (deals + others)[:max(self.shown, PAGE)]):
             self.after(50, self.start_review_check)
+
+    def hidden_groups(self):
+        """Listings left out of the results, grouped by why."""
+        filt = [o for o in self.results if (self.hide_acc and o.accessory) or (self.hide_used and o.used)]
+        names = {"cheap": "TOO CHEAP TO BE THE PRODUCT (cases, parts...)", "site": "FROM SITES YOU HIDE",
+                 "reported": "LISTINGS YOU REPORTED"}
+        groups = [("FILTERED OUT BY YOUR SETTINGS (used / accessories)", filt)] if filt else []
+        for key in ("cheap", "site", "reported"):
+            items = [o for o, why in self.hidden_offers if why == key]
+            if items:
+                groups.append((names[key], items))
+        return groups
+
+    def hidden_section(self, inner, sym):
+        """A quiet link at the very bottom: reveals everything the search left out, labelled by reason."""
+        if getattr(self, "link_info", None):
+            return
+        groups = self.hidden_groups()
+        n = sum(len(g[1]) for g in groups)
+        if not n:
+            return
+        text = f"Hide the {n} hidden listings" if self.show_hidden else f"Show {n} hidden listings"
+        self.button(inner, text, self.toggle_hidden, pad=(12, 4), style="ghost", font=self.f_small).pack(
+            anchor="w", padx=16, pady=(14, 18))
+        if self.show_hidden:
+            for title, items in groups:
+                self.section(inner, f"HIDDEN  \u00b7  {title}  \u00b7  {len(items)}", False)
+                self.card_grid(inner, items, sym)
+
+    def toggle_hidden(self):
+        self.show_hidden = not self.show_hidden
+        try:
+            keep = self.res.canvas.yview()[0]
+        except tk.TclError:
+            keep = 0.0
+        self.render_results()
+        if keep > 0.02:
+            self.after(60, lambda: self.res.canvas.yview_moveto(keep))
 
     def search_exact(self):
         if self.fixed:

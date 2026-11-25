@@ -1,1 +1,3 @@
-2026-11-25 18:06:54  checked 1 page(s), corrected 1
+2026-11-25 18:28:42  checked 2 page(s), corrected 0
+Sony WH-1000XM5 Headphones @ 404.0: plain fetch failed (FetchError: HTTPConnectionPool(host='jbhi-fi', port=80): Max r); browser failed (Page.goto: net::ERR_NAME_NOT_RESOLVED at http://jb)
+Sony WH-1000XM5 case @ 9.0: plain fetch failed (FetchError: HTTPConnectionPool(host='jbhi-fi', port=80): Max r); browser failed (Page.goto: net::ERR_NAME_NOT_RESOLVED at http://jb)
