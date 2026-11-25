@@ -157,7 +157,7 @@ def ensure_deps():
 ensure_deps()
 import engine as E  # noqa: E402
 
-if getattr(E, "ENGINE_VERSION", 0) < 77:
+if getattr(E, "ENGINE_VERSION", 0) < 78:
     _r = tk.Tk()
     _r.withdraw()
     messagebox.showerror("Deals", "engine.py is out of date.\n\nReplace it with the new engine.py from the "
@@ -1514,6 +1514,7 @@ class App(tk.Tk):
         self._stream, self._stream_sig, self._dev_clicks, self._dev_t = False, None, 0, 0.0
         self._digest_busy, self._ml_busy, self._ml_pending = False, False, []
         self._pc_busy, self._pc_base, self._pc_dots = None, "", 0
+        self._pc_banner = self._pc_title = None
         self.show_hidden, self.hidden_offers = False, []      # "Show hidden listings" at the bottom of the results
         self._sgen, self._scancel = 0, None               # which search is current, and how to stop the one before
         self.progs = []                                   # running progress cards (so a hidden one can be brought back)
@@ -2856,10 +2857,10 @@ class App(tk.Tk):
         self.set_status("ready")
         if self.view == "results":
             self.res.outer.pack(fill="both", expand=True)
+        self.start_price_check(offers)                   # sets the "confirming prices" banner before drawing
         self.render_results()
         if keep > 0.02:
             self.after(60, lambda: self.res.canvas.yview_moveto(keep))
-        self.start_price_check(offers)
 
     def start_price_check(self, offers):
         """Re-read prices from the shop's own product pages (JB Hi-Fi etc.) after the results are already on screen,
@@ -2871,7 +2872,7 @@ class App(tk.Tk):
             return
         self._pc_busy = gen
         self._pc_base, self._pc_dots = self.info_var.get(), 0
-        self.animate_price_check(gen)
+        self.after(400, lambda: self.animate_price_check(gen))
 
         def work():
             fixed = 0
@@ -2889,12 +2890,23 @@ class App(tk.Tk):
             return
         self._pc_dots = (self._pc_dots + 1) % 4
         self.info_var.set(f"{self._pc_base}  -  confirming the latest prices at the shops{'.' * self._pc_dots}")
+        try:
+            if self._pc_banner is not None:
+                self._pc_title.configure(text="Confirming the best prices" + "." * self._pc_dots)
+        except tk.TclError:
+            pass
         self.after(400, lambda: self.animate_price_check(gen))
 
     def price_check_done(self, gen, fixed):
         if self._pc_busy == gen:
             self._pc_busy = None
             self.info_var.set(self._pc_base)
+            try:
+                if self._pc_banner is not None:
+                    self._pc_banner.destroy()
+            except tk.TclError:
+                pass
+            self._pc_banner = None
         if not fixed or gen != self._sgen or self.view != "results":
             return
         try:
@@ -3001,6 +3013,15 @@ class App(tk.Tk):
                    "Nothing matched this search. Some stores may be blocking us - see Sources." if self.query
                    else "Search for anything.")
             self.label(inner, sub, "muted", font=self.f_small).pack(anchor="w", padx=16, pady=(2, 6))
+        self._pc_banner = None
+        if self._pc_busy is not None and self._pc_busy == self._sgen:
+            self._pc_banner = self.frame(inner)
+            self._pc_banner.pack(fill="x", padx=16, pady=(14, 8))
+            self._pc_title = self.label(self._pc_banner, "Confirming the best prices", "accent", font=self.f_page,
+                                        anchor="center")
+            self._pc_title.pack(fill="x")
+            self.label(self._pc_banner, "Double-checking the shops' own pages for any price changes or deals",
+                       "muted", anchor="center").pack(fill="x", pady=(2, 0))
         budget = self.shown
         if deals:
             self.section(inner, f"DEALS  \u00b7  {len(deals)}", True)
