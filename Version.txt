@@ -1,5 +1,7 @@
-64
+65
 https://github.com/M000Nz/Deals
+note: New Alerts window: plain step-by-step instructions for the phone (ntfy), Discord, Telegram and email options, a button that makes you a private phone name, and a Send a test button on each that tells you if it worked or why not
+note: Daily digest 'Send a test now' now shows a progress card, explains when it can't run, and is faster
 note: For you: Find more now replaces the whole page with fresh suggestions (nothing piles up), and never repeats ones you were already shown
 note: For you: Interested and Not interested now visibly work - half of each search round follows what you liked, Interested looks for similar deals straight away, and Not interested also clears the same brand and type
 note: New opt-in daily deals digest (Settings > daily deals digest): pick up to 5 categories and get the best fresh deals in just those, once a day

@@ -37,7 +37,7 @@ from urllib.parse import parse_qs, quote, quote_plus, unquote, urlencode, urljoi
 import requests
 from bs4 import BeautifulSoup
 
-ENGINE_VERSION = 64
+ENGINE_VERSION = 65
 GITHUB_REPO = "M000Nz/Deals"
 GITHUB_API = "https://api.github.com"
 FROZEN = bool(getattr(sys, "frozen", False))                  # True when running as the packaged Deals.exe
@@ -2588,18 +2588,18 @@ def notify(s: dict, subject: str, body: str, url: str | None, log=print):
             h = {"Title": subject.encode("utf-8"), "Priority": "high", "Tags": "moneybag"}
             if url:
                 h["Click"] = url
-            requests.post(f"https://ntfy.sh/{s['ntfy']}", data=body.encode("utf-8"), headers=h, timeout=15)
+            requests.post(f"https://ntfy.sh/{s['ntfy']}", data=body.encode("utf-8"), headers=h, timeout=15).raise_for_status()
         except requests.RequestException as e:
             log(f"ntfy failed: {e}")
     if s.get("discord"):
         try:
-            requests.post(s["discord"], json={"content": f"**{subject}**\n{body}"}, timeout=15)
+            requests.post(s["discord"], json={"content": f"**{subject}**\n{body}"}, timeout=15).raise_for_status()
         except requests.RequestException as e:
             log(f"Discord failed: {e}")
     if s.get("tg_token") and s.get("tg_chat"):
         try:
             requests.post(f"https://api.telegram.org/bot{s['tg_token']}/sendMessage",
-                          json={"chat_id": s["tg_chat"], "text": f"{subject}\n{body}"}, timeout=15)
+                          json={"chat_id": s["tg_chat"], "text": f"{subject}\n{body}"}, timeout=15).raise_for_status()
         except requests.RequestException as e:
             log(f"Telegram failed: {e}")
     if s.get("email_host") and s.get("email_to"):
@@ -3346,7 +3346,8 @@ def digest_due(s: dict, now: float | None = None) -> bool:
     return lt.tm_hour >= hour and s.get("digest_sent") != time.strftime("%Y-%m-%d", lt)
 
 
-def run_digest(stores: list[dict], cfg: dict | None = None, log=print, cancel=None, force: bool = False) -> dict | None:
+def run_digest(stores: list[dict], cfg: dict | None = None, log=print, cancel=None, force: bool = False,
+               progress=None) -> dict | None:
     """Search ONLY the categories you chose, then send the best few in each as one message.
     Returns {'subject','body','url','n'} (also sent to your alert channels), or None when nothing was found."""
     con = db()
@@ -3360,11 +3361,13 @@ def run_digest(stores: list[dict], cfg: dict | None = None, log=print, cancel=No
         set_setting(con, "digest_sent", time.strftime("%Y-%m-%d"))          # one attempt a day, whatever the outcome
     sym = s.get("currency", "$")
     t0, sections, first_url, total = time.time(), [], None, 0
-    for cat in cats:
+    for i, cat in enumerate(cats):
         if cancel is not None and cancel.is_set():
             break
+        if progress:
+            progress(i, len(cats), cat)
         try:
-            refresh_daily(stores, cfg, log=log, cancel=cancel, category=cat)
+            refresh_daily(stores, cfg, log=log, cancel=cancel, category=cat, sweep=8)
         except Exception as ex:  # noqa: BLE001
             log(f"digest: {cat} failed: {ex}")
             continue
@@ -3713,14 +3716,15 @@ def picks_age(con, kind: str) -> float | None:
     return (time.time() - r["m"]) if r and r["m"] else None
 
 
-def refresh_daily(stores: list[dict], cfg: dict | None = None, progress=None, log=print, cancel=None, category: str = "All") -> int:
+def refresh_daily(stores: list[dict], cfg: dict | None = None, progress=None, log=print, cancel=None, category: str = "All",
+                  sweep: int | None = None) -> int:
     """Big-ticket items that are a long way below their normal price today. Returns how many were found."""
     con = db()
     cfg = dict(cfg or {}, _cancel=cancel)
     cat = category if category in DAILY_CATS else "All"
     pool = DAILY_CATS[cat] if cat != "All" else DAILY_QUERIES
     min_price = DAILY_MIN_PRICE if cat == "All" else min(DAILY_MIN_PRICE, 60.0)    # hobby gear is often cheaper
-    queries = [(q, q) for q in random.sample(pool, min(DAILY_SWEEP, len(pool)))]
+    queries = [(q, q) for q in random.sample(pool, min(sweep or DAILY_SWEEP, len(pool)))]
     res = find_offers_many(queries, stores, cfg, progress=progress, deadline=150.0)
     if _cancelled(cfg):
         return 0

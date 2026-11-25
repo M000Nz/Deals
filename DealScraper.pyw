@@ -157,7 +157,7 @@ def ensure_deps():
 ensure_deps()
 import engine as E  # noqa: E402
 
-if getattr(E, "ENGINE_VERSION", 0) < 64:
+if getattr(E, "ENGINE_VERSION", 0) < 65:
     _r = tk.Tk()
     _r.withdraw()
     messagebox.showerror("Deals", "engine.py is out of date.\n\nReplace it with the new engine.py from the "
@@ -645,6 +645,225 @@ class ProgressOverlay:
             self.ov.destroy()
         except tk.TclError:
             pass
+
+
+class AlertsDialog(tk.Toplevel):
+    """Where Deals sends its alerts, explained step by step for each option, with a Test button that says what happened."""
+    MODES = {"Right away": "instant", "One message a day": "summary"}
+
+    def __init__(self, app):
+        super().__init__(app)
+        self.app = app
+        self.title("Alerts")
+        self.transient(app)
+        self.geometry(f"{px(640)}x{px(760)}+{app.winfo_rootx() + px(70)}+{app.winfo_rooty() + px(30)}")
+        app.reg(self, "window")
+        s = E.get_settings(E.db())
+        self.v = {k: tk.StringVar(value=s.get(k, "")) for k in
+                  ("ntfy", "discord", "tg_token", "tg_chat", "email_host", "email_port", "email_user", "email_pass",
+                   "email_from", "email_to", "summary_hour", "quiet_start", "quiet_end")}
+        self.popups = s.get("popups", "1") == "1"
+        self.quiet_on = s.get("quiet_on", "0") == "1"
+        self.mode = "One message a day" if s.get("alert_mode") == "summary" else "Right away"
+        self.chips = {}
+        sf = ScrollFrame(app, self)
+        self.sf = sf
+        bar = app.frame(self)
+        bar.pack(side="bottom", fill="x", padx=14, pady=10)
+        app.frame(self, "line", height=1).pack(side="bottom", fill="x")
+        sf.outer.pack(fill="both", expand=True)
+        app.button(bar, "save", self.save, style="solid").pack(side="right")
+        app.button(bar, "cancel", self.destroy, style="ghost").pack(side="right", padx=(0, 6))
+        self.build(sf.inner)
+
+    # -- small building blocks
+    def head(self, parent, title, sub="", chip=None):
+        app = self.app
+        app.frame(parent, "line", height=1).pack(fill="x", padx=18, pady=(14, 0))
+        row = app.frame(parent)
+        row.pack(fill="x", padx=18, pady=(12, 0))
+        app.label(row, title, font=app.f_big).pack(side="left")
+        if chip:
+            self.chips[chip] = app.label(row, "", "accent", font=app.f_small_b)
+            self.chips[chip].pack(side="left", padx=10)
+        if sub:
+            app.label(parent, sub, "muted", font=app.f_small, wraplength=px(560), justify="left").pack(
+                anchor="w", padx=18, pady=(2, 0))
+
+    def steps(self, parent, lines):
+        for i, t in enumerate(lines, 1):
+            r = self.app.frame(parent)
+            r.pack(fill="x", padx=18, pady=(4, 0))
+            self.app.label(r, f"{i}.", "accent", font=self.app.f_small_b).pack(side="left", anchor="n")
+            self.app.label(r, t, font=self.app.f_small, wraplength=px(540), justify="left").pack(
+                side="left", padx=(8, 0), anchor="w")
+
+    def field(self, parent, label, key, show="", width=34, hint=""):
+        app = self.app
+        r = app.frame(parent)
+        r.pack(fill="x", padx=18, pady=(8, 0))
+        app.label(r, label, "muted", font=app.f_small).pack(anchor="w")
+        app.entry(r, self.v[key], width=width, show=show).pack(anchor="w", pady=(2, 0))
+        if hint:
+            app.label(r, hint, "muted", font=app.f_small, wraplength=px(540), justify="left").pack(anchor="w", pady=(2, 0))
+
+    def test_row(self, parent, chan, extra=None):
+        r = self.app.frame(parent)
+        r.pack(fill="x", padx=18, pady=(10, 0))
+        self.app.button(r, "Send a test", lambda: self.test(chan), style="outline").pack(side="left")
+        for text, cmd in (extra or []):
+            self.app.button(r, text, cmd, style="ghost").pack(side="left", padx=(6, 0))
+        return r
+
+    def build(self, p):
+        app = self.app
+        app.label(p, "Alerts", font=app.f_page).pack(anchor="w", padx=18, pady=(16, 0))
+        app.label(p, "Deals tells you when something on your Watchlist reaches your target price or goes on sale. Pick where "
+                     "those messages go - you can use more than one, and you can skip any you don't want. Every option has a "
+                     "Send a test button so you know it works.", "muted", font=app.f_small, wraplength=px(580),
+                  justify="left").pack(anchor="w", padx=18, pady=(4, 0))
+
+        self.head(p, "On this computer", "A small box in the corner of your screen. No setup. It only appears while Deals is "
+                                          "open (it can stay open in the notification area).")
+        r = app.frame(p)
+        r.pack(anchor="w", padx=18, pady=(8, 0))
+        self.sw_pop = app.switch(r, self.popups, lambda v: setattr(self, "popups", v))
+        self.sw_pop.pack(side="left")
+        app.label(r, "Show a pop-up when a deal is found").pack(side="left", padx=10)
+
+        self.head(p, "When should alerts be sent?")
+        r = app.frame(p)
+        r.pack(anchor="w", padx=18, pady=(8, 0))
+        app.dropdown(r, "", list(self.MODES), lambda: self.mode, lambda v: setattr(self, "mode", v)).pack(side="left")
+        r2 = app.frame(p)
+        r2.pack(anchor="w", padx=18, pady=(6, 0))
+        app.label(r2, "If \"one message a day\": send it after", "muted", font=app.f_small).pack(side="left")
+        app.entry(r2, self.v["summary_hour"], width=4).pack(side="left", padx=6)
+        app.label(r2, "o'clock (0-23, so 8 = 8am)", "muted", font=app.f_small).pack(side="left")
+        r3 = app.frame(p)
+        r3.pack(anchor="w", padx=18, pady=(12, 0))
+        self.sw_quiet = app.switch(r3, self.quiet_on, lambda v: setattr(self, "quiet_on", v))
+        self.sw_quiet.pack(side="left")
+        app.label(r3, "Quiet hours - nothing while I sleep").pack(side="left", padx=10)
+        r4 = app.frame(p)
+        r4.pack(anchor="w", padx=18, pady=(6, 0))
+        app.label(r4, "Quiet from", "muted", font=app.f_small).pack(side="left")
+        app.entry(r4, self.v["quiet_start"], width=4).pack(side="left", padx=6)
+        app.label(r4, "until", "muted", font=app.f_small).pack(side="left")
+        app.entry(r4, self.v["quiet_end"], width=4).pack(side="left", padx=6)
+        app.label(r4, "(e.g. 22 and 7 = 10pm to 7am). Alerts found meanwhile arrive together afterwards.", "muted",
+                  font=app.f_small, wraplength=px(330), justify="left").pack(side="left")
+
+        self.head(p, "On your phone - ntfy (the easiest)", "Free. No account. Works on iPhone and Android.", chip="ntfy")
+        self.steps(p, ["On your phone, install the free app called \"ntfy\" (App Store or Google Play).",
+                       "Press the button below to make yourself a private name, or type your own. Anyone who knows the name can "
+                       "read your alerts, so make it hard to guess (letters and numbers only).",
+                       "In the ntfy app, tap the + button, choose \"Subscribe to topic\" and type exactly the same name.",
+                       "Press Send a test. Your phone should buzz within a few seconds."])
+        self.field(p, "Your private name", "ntfy", width=30)
+        self.test_row(p, "ntfy", [("Make me a private name", self.make_topic)])
+
+        self.head(p, "Discord", "If you already use Discord, alerts can appear in a channel of your own server.", chip="discord")
+        self.steps(p, ["In Discord, open your server's settings > Integrations > Webhooks > New Webhook.",
+                       "Choose the channel the alerts should go to, then press \"Copy Webhook URL\".",
+                       "Paste it below and press Send a test."])
+        self.field(p, "Webhook URL", "discord", show="*", width=44)
+        self.test_row(p, "discord")
+
+        self.head(p, "Telegram", "Alerts arrive as a message from your own little bot.", chip="telegram")
+        self.steps(p, ["In Telegram, search for \"BotFather\" (the one with the blue tick), send it /newbot and follow its "
+                       "questions. It then gives you a long \"token\" - paste it below.",
+                       "Open a chat with your new bot and press Start (or send it any message). This step is easy to miss and "
+                       "alerts won't arrive without it.",
+                       "To find your chat id, message the bot \"userinfobot\" - it replies with a number. Paste that number below.",
+                       "Press Send a test."])
+        self.field(p, "Bot token", "tg_token", show="*", width=44)
+        self.field(p, "Your chat id (a number)", "tg_chat", width=20)
+        self.test_row(p, "telegram")
+
+        self.head(p, "Email", "Deals sends the alert from your email account to any address you choose.", chip="email")
+        self.steps(p, ["Easiest with Gmail: press \"Fill in for Gmail\" below. Other providers: search for \"<your provider> SMTP "
+                       "settings\" and type the server and port.",
+                       "Most providers won't accept your normal password here. For Gmail, turn on 2-step verification, then "
+                       "create an \"App password\" in your Google account security page, and paste that as the password.",
+                       "Fill in the rest (your email address is the username), then press Send a test and check your inbox "
+                       "(and Junk)."])
+        self.field(p, "Mail server", "email_host", width=30)
+        self.field(p, "Port (usually 587)", "email_port", width=8)
+        self.field(p, "Username (your email address)", "email_user", width=34)
+        self.field(p, "Password (an app password for Gmail)", "email_pass", show="*", width=34)
+        self.field(p, "Send from (leave blank to use your username)", "email_from", width=34)
+        self.field(p, "Send alerts to", "email_to", width=34)
+        self.test_row(p, "email", [("Fill in for Gmail", self.fill_gmail)])
+        app.frame(p, height=18).pack()
+        self.update_chips()
+        for k in ("ntfy", "discord", "tg_token", "tg_chat", "email_host", "email_to"):
+            self.v[k].trace_add("write", lambda *a: self.update_chips())
+
+    # -- behaviour
+    def make_topic(self):
+        import secrets
+        self.v["ntfy"].set("deals-" + secrets.token_hex(5))
+
+    def fill_gmail(self):
+        self.v["email_host"].set("smtp.gmail.com")
+        self.v["email_port"].set("587")
+
+    def configured(self):
+        g = lambda k: self.v[k].get().strip()
+        return {"ntfy": bool(g("ntfy")), "discord": bool(g("discord")),
+                "telegram": bool(g("tg_token") and g("tg_chat")), "email": bool(g("email_host") and g("email_to"))}
+
+    def update_chips(self):
+        for k, ok in self.configured().items():
+            try:
+                self.chips[k].configure(text="\u2713 set up" if ok else "")
+            except (KeyError, tk.TclError):
+                pass
+
+    def test(self, chan):
+        g = lambda k: self.v[k].get().strip()
+        cfg = {"ntfy": {"ntfy": g("ntfy")}, "discord": {"discord": g("discord")},
+               "telegram": {"tg_token": g("tg_token"), "tg_chat": g("tg_chat")},
+               "email": {k: g(k) for k in ("email_host", "email_port", "email_user", "email_pass", "email_from", "email_to")}}[chan]
+        if not self.configured()[chan]:
+            return messagebox.showinfo("alerts", "Fill in the boxes for this option first (see the steps above them).")
+        if chan == "ntfy" and (len(cfg["ntfy"]) < 6 or not re.fullmatch(r"[A-Za-z0-9_\-]+", cfg["ntfy"])):
+            return messagebox.showinfo("alerts", "Use at least 6 letters or numbers, with no spaces. "
+                                       "Press \"Make me a private name\" if you're not sure.")
+        problems = []
+        self.app.set_status("sending a test...")
+
+        def work():
+            E.notify(cfg, "Deals test", "If you can read this, alerts to this place work.", None, problems.append)
+
+            def finish():
+                self.app.set_status("ready")
+                if problems:
+                    messagebox.showinfo("alerts", "That didn't work:\n\n" + problems[0][:300] +
+                                        "\n\nCheck the boxes against the steps above and try again.")
+                else:
+                    where = {"ntfy": "your phone (open the ntfy app)", "discord": "your Discord channel",
+                             "telegram": "Telegram", "email": "your inbox (check Junk too)"}[chan]
+                    messagebox.showinfo("alerts", f"Test sent. It should arrive on {where} within a minute.")
+            self.app.q.put(finish)
+        threading.Thread(target=work, daemon=True).start()
+
+    def save(self):
+        con = E.db()
+        d = {k: self.v[k].get().strip() for k in self.v}
+        for k in ("summary_hour", "quiet_start", "quiet_end"):
+            try:
+                d[k] = str(max(0, min(23, int(float(d[k])))))
+            except ValueError:
+                d[k] = E.DEFAULTS[k]
+        d["popups"] = "1" if self.popups else "0"
+        d["quiet_on"] = "1" if self.quiet_on else "0"
+        d["alert_mode"] = self.MODES.get(self.mode, "instant")
+        for k, v in d.items():
+            E.set_setting(con, k, v)
+        self.app.set_status("alert settings saved")
+        self.destroy()
 
 
 class StoresDialog(tk.Toplevel):
@@ -3810,37 +4029,60 @@ class App(tk.Tk):
         self.after(1000, self.tick)
 
     # ---------------------------------------------------- daily deals digest --
-    def maybe_digest(self, force=False):
-        """Once a day (if you opted in): look for fresh deals in the categories you chose and send them as one message."""
+    def maybe_digest(self, force=False, host=None):
+        """Once a day (if you opted in): look for fresh deals in the categories you chose and send them as one message.
+        With force=True (the test button) it runs now and shows what it is doing."""
         if self._digest_busy:
+            if force:
+                messagebox.showinfo("digest", "A digest is already being built - one moment.")
             return
         s = E.get_settings(E.db())
         if not force and not E.digest_due(s):
             return
+        cats = E.digest_cats(s)
+        if force and not cats:
+            return messagebox.showinfo("digest", "Pick at least one category first.")
         if self.scanning or self.searching or self.picking or getattr(self, "_testing_all", False):
+            if force:
+                messagebox.showinfo("digest", "Deals is busy with a search or check right now. Try again in a moment.")
             return                                             # wait until Deals is idle
         self._digest_busy = True
         stores = E.active_stores(E.db(), s.get("region") or self.region)
+        if not stores:
+            self._digest_busy = False
+            return messagebox.showinfo("digest", "No sources are switched on. Open Sources > manage sources.") if force else None
         self.set_status("building your daily deals digest...")
+        prog = None
+        if force:
+            host = host if host is not None and host.winfo_exists() else self
+            prog = ProgressOverlay(self, host, "Building your digest", len(cats),
+                                   "Searching just your categories. This can take a minute or two.")
+
+        def step(i, n, cat):
+            self.q.put(lambda: (prog.update(i, f"Looking for {cat} deals...") if prog else None,
+                                self.set_status(f"digest: {cat} ({i + 1} of {n})")))
 
         def work():
             res, err = None, ""
             try:
-                res = E.run_digest(stores, s, force=force)
+                res = E.run_digest(stores, s, force=force, progress=step)
             except Exception:  # noqa: BLE001
                 log_error(traceback.format_exc())
                 err = "the digest could not be built - see deals_error.log"
 
             def finish():
                 self._digest_busy = False
+                if prog:
+                    prog.close()
                 if res:
                     self.set_status(f"digest sent: {res['n']} deals")
                     if s.get("popups") == "1" or force:
                         self.show_digest(res)
                 else:
-                    self.set_status(err or ("no strong deals found in your categories today" if force else "ready"))
+                    self.set_status(err or "no strong deals found in your categories today")
                     if force:
-                        messagebox.showinfo("digest", err or "Nothing strongly discounted in those categories right now.")
+                        messagebox.showinfo("digest", err or "Nothing strongly discounted in those categories right now, so "
+                                            "no digest was sent. That is normal on a quiet day - try again tomorrow.")
             self.q.put(finish)
         threading.Thread(target=work, daemon=True).start()
 
@@ -3922,7 +4164,12 @@ class App(tk.Tk):
                 win.destroy()
         bar = self.frame(body)
         bar.pack(fill="x", pady=(16, 0))
-        self.button(bar, "Send a test now", lambda: (save(False), self.maybe_digest(force=True)), style="ghost").pack(side="left")
+        def test():
+            if not sel:
+                return messagebox.showinfo("digest", "Pick at least one category first.")
+            save(False)
+            self.maybe_digest(force=True, host=win)
+        self.button(bar, "Send a test now", test, style="ghost").pack(side="left")
         self.button(bar, "cancel", win.destroy, style="ghost").pack(side="right")
         self.button(bar, "save", save, style="solid").pack(side="right", padx=(0, 6))
         win.update_idletasks()
@@ -4124,36 +4371,7 @@ class App(tk.Tk):
 
     # ----------------------------------------------------------------- alerts --
     def open_alerts(self):
-        s = E.get_settings(E.db())
-        fields = [{"key": "popups", "label": "show a pop-up when a deal is found", "kind": "check",
-                   "default": s["popups"]},
-                  {"key": "alert_mode", "label": "send alerts", "kind": "dropdown", "values": ["instant", "summary"],
-                   "default": s.get("alert_mode", "instant"),
-                   "hint": "instant = the moment a deal is found.  summary = one message a day with everything found."},
-                  {"key": "summary_hour", "label": "summary time (hour, 0-23)", "width": 5, "default": s.get("summary_hour", "8")},
-                  {"key": "quiet_on", "label": "quiet hours (no alerts while you sleep)", "kind": "check",
-                   "default": s.get("quiet_on", "0")},
-                  {"key": "quiet_start", "label": "quiet from (hour)", "width": 5, "default": s.get("quiet_start", "22")},
-                  {"key": "quiet_end", "label": "quiet until (hour)", "width": 5, "default": s.get("quiet_end", "7"),
-                   "hint": "Deals found during quiet hours are held and sent as one message when they end."}]
-        fields += [{"key": k, "label": label, "kind": "password" if secret else "entry",
-                    "default": s.get(k, ""), "width": 40} for k, label, secret in ALERT_FIELDS]
-        d = Form(self, "alerts", fields, extras=[("send test", self.send_test)],
-                 intro="Optional: get deals on your phone or inbox too. Easiest is ntfy - install the free "
-                       "ntfy app, subscribe to a topic name you make up, and type it here.\n"
-                       + ("Passwords are stored in your system's password store." if E.secure_store_available() else
-                          "Tip: install the 'keyring' add-on (pip install keyring) to keep passwords in your system's "
-                          "password store instead of the Deals database file.")).result
-        if d:
-            con = E.db()
-            for k in ("summary_hour", "quiet_start", "quiet_end"):
-                try:
-                    d[k] = str(max(0, min(23, int(float(d[k])))))
-                except (ValueError, KeyError):
-                    d[k] = E.DEFAULTS[k]
-            for k, v in d.items():
-                E.set_setting(con, k, v)
-            self.set_status("alert settings saved")
+        AlertsDialog(self)
 
     def toggle_health(self):
         con = E.db()
