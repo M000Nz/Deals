@@ -157,7 +157,7 @@ def ensure_deps():
 ensure_deps()
 import engine as E  # noqa: E402
 
-if getattr(E, "ENGINE_VERSION", 0) < 75:
+if getattr(E, "ENGINE_VERSION", 0) < 76:
     _r = tk.Tk()
     _r.withdraw()
     messagebox.showerror("Deals", "engine.py is out of date.\n\nReplace it with the new engine.py from the "
@@ -1513,7 +1513,7 @@ class App(tk.Tk):
         self._testing_all, self._test_prog = False, None
         self._stream, self._stream_sig, self._dev_clicks, self._dev_t = False, None, 0, 0.0
         self._digest_busy, self._ml_busy, self._ml_pending = False, False, []
-        self._pc_busy = None
+        self._pc_busy, self._pc_base, self._pc_dots = None, "", 0
         self._sgen, self._scancel = 0, None               # which search is current, and how to stop the one before
         self.progs = []                                   # running progress cards (so a hidden one can be brought back)
         self._err_count = 0
@@ -2866,6 +2866,8 @@ class App(tk.Tk):
         if not todo or self._pc_busy == gen:
             return
         self._pc_busy = gen
+        self._pc_base, self._pc_dots = self.info_var.get(), 0
+        self.animate_price_check(gen)
 
         def work():
             fixed = 0
@@ -2877,9 +2879,18 @@ class App(tk.Tk):
 
         threading.Thread(target=work, daemon=True).start()
 
+    def animate_price_check(self, gen):
+        """A small moving note while the shop pages are being re-read, so it's clear the app is still confirming prices."""
+        if self._pc_busy != gen or gen != self._sgen:
+            return
+        self._pc_dots = (self._pc_dots + 1) % 4
+        self.info_var.set(f"{self._pc_base}  -  confirming the latest prices at the shops{'.' * self._pc_dots}")
+        self.after(400, lambda: self.animate_price_check(gen))
+
     def price_check_done(self, gen, fixed):
         if self._pc_busy == gen:
             self._pc_busy = None
+            self.info_var.set(self._pc_base)
         if not fixed or gen != self._sgen or self.view != "results":
             return
         try:
