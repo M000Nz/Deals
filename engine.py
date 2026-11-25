@@ -37,7 +37,7 @@ from urllib.parse import parse_qs, quote, quote_plus, unquote, urlencode, urljoi
 import requests
 from bs4 import BeautifulSoup
 
-ENGINE_VERSION = 68
+ENGINE_VERSION = 69
 GITHUB_REPO = "M000Nz/Deals"
 GITHUB_API = "https://api.github.com"
 FROZEN = bool(getattr(sys, "frozen", False))                  # True when running as the packaged Deals.exe
@@ -90,6 +90,7 @@ CATALOG: dict[str, list[tuple[str, str]]] = {
         ("Camera House", "https://www.camerahouse.com.au/catalogsearch/result/?q={query}"),
         ("Microsoft AU", "https://www.microsoft.com/en-au/search/shop?q={query}"),
         ("Back Market AU", "https://www.backmarket.com.au/en-au/search?q={query}"),
+        ("Cash Converters", "https://www.cashconverters.com.au/shop/search?q={query}"),
         ("MyDeal", "https://www.mydeal.com.au/search?q={query}"),
         ("Appliances Online", "https://www.appliancesonline.com.au/search/?q={query}"),
         ("Mobileciti", "https://www.mobileciti.com.au/search?q={query}"),
@@ -253,7 +254,7 @@ STORE_CATS = {
     "StaticICE (200+ AU stores)": "all", "OzBargain (limited-time deals)": "all",
     "Amazon AU": "general", "Kogan": "general", "Catch": "general", "MyDeal": "general", "Big W": "general",
     "Target AU": "general", "Kmart": "general", "Myer": "general", "David Jones": "general",
-    "Costco AU": "general", "Back Market AU": "tech",
+    "Costco AU": "general", "Back Market AU": "tech", "Cash Converters": "general",
     "JB Hi-Fi": "tech gaming home", "Harvey Norman": "tech home", "The Good Guys": "tech home",
     "Officeworks": "tech office", "Bing Lee": "tech home", "Scorptec": "tech", "PLE Computers": "tech",
     "Umart": "tech", "Mwave": "tech", "Centre Com": "tech", "MSY": "tech", "Computer Alliance": "tech",
@@ -1278,6 +1279,7 @@ def make_soup(page: str) -> BeautifulSoup:
     return soup
 
 
+USED_ONLY_STORES = {"Cash Converters"}          # everything they sell is second-hand
 USED_RE = re.compile(r"(?i)\b(?:refurb(?:ished)?|pre-?owned|second[- ]?hand|used|open[- ]?box|renewed|ex[- ]?demo|ex[- ]?display|"
                      r"reconditioned|grey import|gray import|parallel import|international (?:version|model|stock))\b")
 OOS_RE = re.compile(r"(?i)out of stock|sold out|currently unavailable|temporarily unavailable|notify me when|back[- ]?order|"
@@ -2422,7 +2424,7 @@ def _partial_rank(kw: str, results: list, cfg: dict | None) -> list:
     words = blocked_words(cfg)
     raw = [o for _, offs, _ in results for o in offs]
     for o in raw:
-        o.used = o.used or bool(USED_RE.search(o.title))
+        o.used = o.used or bool(USED_RE.search(o.title)) or o.store in USED_ONLY_STORES
     hid = hidden_url_set(db())
     visible = [o for o in raw if not is_hidden_offer(o, words) and o.url not in hid]
     ranked, _ = drop_junk_prices(rank_offers(kw, visible))
@@ -2489,7 +2491,7 @@ def _find_pass(queries: list[tuple], stores: list[dict], cfg: dict | None = None
         raw = [o for _, offs, _ in results[k] for o in offs]
         hid = hidden_url_set(con)
         for o in raw:
-            o.used = o.used or bool(USED_RE.search(o.title))
+            o.used = o.used or bool(USED_RE.search(o.title)) or o.store in USED_ONLY_STORES
         visible = [o for o in raw if not is_hidden_offer(o, words) and o.url not in hid]
         try:
             verify_store_prices(visible, cfg=cfg)

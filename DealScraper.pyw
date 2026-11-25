@@ -157,7 +157,7 @@ def ensure_deps():
 ensure_deps()
 import engine as E  # noqa: E402
 
-if getattr(E, "ENGINE_VERSION", 0) < 68:
+if getattr(E, "ENGINE_VERSION", 0) < 69:
     _r = tk.Tk()
     _r.withdraw()
     messagebox.showerror("Deals", "engine.py is out of date.\n\nReplace it with the new engine.py from the "
@@ -1135,12 +1135,13 @@ class Card(tk.Canvas):
         else:
             text = app.star_tip(self.o)
             box = self.star_box
+        edge = px(6)
+        text = wrap_lines(text, f["small_b"], app.cw - 2 * edge - px(18), 1)[0]      # never wider than the card
         w, h = f["small_b"].measure(text) + px(18), f["small_b"].metrics("linespace") + px(10)
-        x1 = box[0] - px(4) if kind == "plus" else box[2] + px(2) + w
-        x0, y0 = max(px(4), x1 - w), box[1] + px(2) + (px(30) if kind == "star" else 0)
-        x0 = min(x0, app.cw - w - px(4))
+        x0 = max(edge, min(self.plus_box[2] - w, app.cw - w - edge))                # right-aligned, kept inside the card
+        y0 = self.plus_box[3] + px(4)                                                # just under the buttons, on the picture
         n0 = len(self.find_all())
-        draw_rrect(self, x0, y0, w, h, h // 2, P["fg"], P["fg"], 0, P["bg"])
+        draw_pill(self, x0, y0, w, h, P["fg"])
         self.create_text(x0 + w / 2, y0 + h / 2, text=text, font=f["small_b"], fill=P["bg"])
         for item in self.find_all()[n0:]:
             self.addtag_withtag("tip", item)
@@ -1243,11 +1244,11 @@ class Card(tk.Canvas):
             draw_pill(self, bx2, by2, size, size, P["accent_fill"])
             self.create_text(bx2 + size / 2, by2 + size / 2, text="\u2713", font=f["small_b"], fill=P["accent_on"])
         else:
-            draw_rrect(self, bx2, by2, size, size, size // 2, P["bg"], P["border"], max(1, px(1)), P["bg"])
+            ui.draw_badge(self, bx2, by2, size, P["bg"], P["border"], max(1, px(1)))
             self.create_text(bx2 + size / 2, by2 + size / 2 - px(1), text="+", font=f["price"], fill=P["fg"])
         sx = bx2 - size - px(6)                                          # reviews button, just left of +
         self.star_box = (sx - px(3), by2 - px(3), sx + size + px(3), by2 + size + px(3))
-        draw_rrect(self, sx, by2, size, size, size // 2, P["bg"], P["border"], max(1, px(1)), P["bg"])
+        ui.draw_badge(self, sx, by2, size, P["bg"], P["border"], max(1, px(1)))
         has = app.rev_info.get(o.url)
         tone = E.review_verdict(has)[0] if has else None
         self.create_text(sx + size / 2, by2 + size / 2 - px(1), text="\u2605", font=f["small_b"],

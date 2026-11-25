@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 3,
   "stores": [
     {"name": "StaticICE (200+ AU stores)", "url": "https://www.staticice.com.au/cgi-bin/search.cgi?q={query}&spos=3", "cats": ["all"], "enabled": true},
     {"name": "Amazon AU", "url": "https://www.amazon.com.au/s?k={query}", "cats": ["general"], "enabled": true},
@@ -183,6 +183,7 @@
     {"name": "Billy Hyde Music", "url": "https://www.billyhyde.com.au/search?q={query}", "cats": ["music"], "enabled": true},
     {"name": "Manny's Music", "url": "https://www.mannys.com.au/search?q={query}", "cats": ["music"], "enabled": true},
     {"name": "BWS", "url": "https://bws.com.au/search?searchTerm={query}", "cats": ["grocery"], "enabled": true},
-    {"name": "Liquorland", "url": "https://www.liquorland.com.au/search?q={query}", "cats": ["grocery"], "enabled": true}
+    {"name": "Liquorland", "url": "https://www.liquorland.com.au/search?q={query}", "cats": ["grocery"], "enabled": true},
+    {"name": "Cash Converters", "url": "https://www.cashconverters.com.au/shop/search?q={query}", "cats": ["general"], "browser": true, "enabled": true}
   ]
 }

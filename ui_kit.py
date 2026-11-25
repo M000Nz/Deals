@@ -172,6 +172,33 @@ def aa_pill(w, h, fill):
     return ph
 
 
+def aa_badge(w, h, fill, outline, bw):
+    """A round button with a thin ring and a transparent surround, so it sits cleanly on top of a picture
+    (the old one had square dark corners showing on light photos)."""
+    key = ("badge", w, h, fill, outline, bw)
+    ph = _CACHE.get(key)
+    if ph is None:
+        S = SS
+        outer = Image.new("L", (w * S, h * S), 0)
+        ImageDraw.Draw(outer).ellipse((0, 0, w * S - 1, h * S - 1), fill=255)
+        inner = Image.new("L", (w * S, h * S), 0)
+        ImageDraw.Draw(inner).ellipse((bw * S, bw * S, w * S - 1 - bw * S, h * S - 1 - bw * S), fill=255)
+        rgb_img = Image.composite(Image.new("RGB", (w * S, h * S), rgb(fill)),
+                                  Image.new("RGB", (w * S, h * S), rgb(outline)), inner).resize((w, h), _resample())
+        rgb_img.putalpha(outer.resize((w, h), _resample()))
+        ph = _remember(key, ImageTk.PhotoImage(rgb_img))
+    return ph
+
+
+def draw_badge(cv, x, y, size, fill, outline, bw):
+    size = int(size)
+    if can_aa():
+        ph = aa_badge(size, size, fill, outline, int(bw))
+        cv.__dict__.setdefault("_keep", []).append(ph)
+        return cv.create_image(x, y, image=ph, anchor="nw")
+    return cv.create_oval(x, y, x + size, y + size, fill=fill, outline=outline, width=bw)
+
+
 def aa_switch(w, h, d, pos, off, on, knob_off, knob_on, bg):
     key = ("sw", w, h, d, round(pos, 2), off, on, knob_off, knob_on, bg)
     ph = _CACHE.get(key)
