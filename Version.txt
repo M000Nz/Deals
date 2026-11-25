@@ -1,5 +1,6 @@
-67
+68
 https://github.com/M000Nz/Deals
+note: Fixed the 'Why these results?' window showing black text on a black background
 note: Searches no longer run out of time on the shops that matter: shops are now searched price-comparison sites first, then shops that sell that kind of product, then the rest (it used to be alphabetical, so Mwave, Scorptec, Umart and StaticICE were often skipped), with 12 searches at once
 note: Router, Wi-Fi and mesh brand words (TP-Link, Archer, Deco, Netgear...) now count as tech so those searches go to tech shops
 note: 'Why these results?' now shows what the shops sent back when few results match

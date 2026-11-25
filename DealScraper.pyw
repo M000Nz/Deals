@@ -157,7 +157,7 @@ def ensure_deps():
 ensure_deps()
 import engine as E  # noqa: E402
 
-if getattr(E, "ENGINE_VERSION", 0) < 67:
+if getattr(E, "ENGINE_VERSION", 0) < 68:
     _r = tk.Tk()
     _r.withdraw()
     messagebox.showerror("Deals", "engine.py is out of date.\n\nReplace it with the new engine.py from the "
@@ -4115,7 +4115,8 @@ class App(tk.Tk):
         self.button(bar, "Copy", copy, style="solid").pack(side="right")
         self.button(bar, "Close", win.destroy).pack(side="right", padx=(0, 8))
         box = tk.Text(win, wrap="word", bd=0, highlightthickness=0, padx=px(14), pady=px(10), font=self.f_small)
-        self.reg(box, "canvas")
+        self.reg(box, "entry")
+        box.configure(highlightthickness=0)
         box.insert("1.0", text)
         box.configure(state="disabled")
         box.pack(fill="both", expand=True)
