@@ -37,7 +37,7 @@ from urllib.parse import parse_qs, quote, quote_plus, unquote, urlencode, urljoi
 import requests
 from bs4 import BeautifulSoup
 
-ENGINE_VERSION = 55
+ENGINE_VERSION = 56
 GITHUB_REPO = "M000Nz/Deals"
 GITHUB_API = "https://api.github.com"
 FROZEN = bool(getattr(sys, "frozen", False))                  # True when running as the packaged Deals.exe
@@ -989,20 +989,23 @@ class BrowserEngine:
                 await page.goto(url, wait_until="domcontentloaded", timeout=30000)
             except Exception:  # noqa: BLE001
                 pass
-            last, waited = None, 0
+            prev = self._state() or {}
+            cookies, waited = None, 0
             while not closed.is_set() and waited < wait_s:
                 try:
                     await asyncio.wait_for(closed.wait(), 2)
                 except asyncio.TimeoutError:
                     waited += 2
                     try:
-                        last = await ctx.storage_state()          # keep the newest cookies; the window may close any moment
+                        # cookies only: ctx.storage_state() also reads every site's local storage by opening hidden tabs
+                        # on each tracker's domain, which showed up as tabs flickering open and shut
+                        cookies = await ctx.cookies()
                     except Exception:  # noqa: BLE001
                         pass
-            if last:
+            if cookies:
                 p = browser_state_path()
                 tmp = p.with_suffix(".tmp")
-                tmp.write_text(json.dumps(last), encoding="utf-8")
+                tmp.write_text(json.dumps({"cookies": cookies, "origins": prev.get("origins", [])}), encoding="utf-8")
                 os.replace(tmp, p)
             return True
         finally:

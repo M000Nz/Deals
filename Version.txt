@@ -1,4 +1,3 @@
-55
+56
 https://github.com/M000Nz/Deals
-note: Verify window now blocks pop-ups and chat widgets (such as Gorgias) that kept opening and closing tabs
-note: Chat widgets are also skipped during searches, which is slightly faster
+note: Fixed tabs opening and closing nonstop in the Verify window - Deals now saves only the cookies, not every tracker site's storage
