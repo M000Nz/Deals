@@ -1,5 +1,6 @@
-69
+70
 https://github.com/M000Nz/Deals
+note: Diagnostics now include a price audit (JB Hi-Fi, Bing Lee, Betta Home Living, Amazon): what Deals read for each product next to the shop's own page markup, so wrong prices can be fixed from real pages
 note: Product pictures: the + and star buttons are now clean round buttons (no square corners over light photos), and their hint labels sit on the picture inside the card instead of getting cut off
 note: New source: Cash Converters (second-hand, always labelled 'refurbished / used')
 note: Fixed the 'Why these results?' window showing black text on a black background

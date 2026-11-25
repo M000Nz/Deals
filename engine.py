@@ -37,7 +37,7 @@ from urllib.parse import parse_qs, quote, quote_plus, unquote, urlencode, urljoi
 import requests
 from bs4 import BeautifulSoup
 
-ENGINE_VERSION = 69
+ENGINE_VERSION = 70
 GITHUB_REPO = "M000Nz/Deals"
 GITHUB_API = "https://api.github.com"
 FROZEN = bool(getattr(sys, "frozen", False))                  # True when running as the packaged Deals.exe
@@ -1868,7 +1868,58 @@ def scrape_store(store: dict, query: str, cfg: dict | None = None, full: str | N
             raise FetchError(kind, kind)
     if rendered and offers:
         store["_browser_used"] = True
+    if getattr(_AUDIT, "on", False):
+        _AUDIT.page = page
     return offers
+
+
+_AUDIT = threading.local()
+AUDIT_SHOPS = ("jb hi-fi", "bing lee", "betta home", "amazon")
+
+
+def price_audit(cfg: dict | None = None, names=AUDIT_SHOPS, per_shop: int = 6, deadline: float = 45.0) -> str:
+    """For diagnostics: for a few shops whose prices have been wrong, run a sample search and record what Deals read
+    (title, price, was-price) next to the shop's own markup around that product, so the price rules can be fixed
+    from real pages instead of guesses."""
+    con = db()
+    rows = [dict(r) for r in con.execute("SELECT * FROM stores WHERE enabled=1")]
+    picks = [r for r in rows if any(n in r["name"].lower() for n in names)]
+
+    def one(st):
+        _AUDIT.on, _AUDIT.page = True, ""
+        q = sample_query(st)
+        out = [f"=== {st['name']}  (search: {q})  {st['search_url']}"]
+        try:
+            offers = scrape_store(dict(st), q, cfg, q)
+            page = getattr(_AUDIT, "page", "") or ""
+            out.append(f"{len(offers)} products read, page {len(page)} bytes, via browser: {bool(st.get('_browser_used'))}")
+            for o in offers[:per_shop]:
+                out.append(f"- READ: ${o.price}  was={o.was_price}  {o.title[:80]}  {o.url[:100]}")
+                i = page.find(o.title[:30]) if o.title else -1
+                if i < 0:
+                    i = page.find(o.url.split("//", 1)[-1].split("/", 1)[-1][:40])
+                if i >= 0:
+                    snip = re.sub(r"\s+", " ", page[max(0, i - 300): i + 1300])
+                    out.append("  MARKUP: " + snip)
+                else:
+                    out.append("  (could not find this product in the page text)")
+        except Exception as e:  # noqa: BLE001
+            out.append(f"failed: {type(e).__name__}: {str(e)[:120]}")
+        finally:
+            _AUDIT.on = False
+        return "\n".join(out)
+
+    texts = []
+    ex = ThreadPoolExecutor(max_workers=4)
+    futs = {ex.submit(one, st): st for st in picks}
+    try:
+        done, notdone = wait(list(futs), timeout=deadline)
+        for fut in done:
+            texts.append(fut.result())
+        texts += [f"=== {futs[f]['name']}: still running after {deadline:.0f}s, skipped" for f in notdone]
+    finally:
+        ex.shutdown(wait=False, cancel_futures=True)
+    return "\n\n".join(texts) or "(none of the audited shops are turned on)"
 
 
 _HOST_SEMS: dict = {}
@@ -3024,6 +3075,10 @@ def build_diagnostics(data_dir: str | os.PathLike | None = None) -> tuple[str, s
         z.writestr("summary.txt", summary)
         z.writestr("all_sources.txt", "\n".join(
             f"{r['name']}\t{'on' if r['enabled'] else 'off'}\t{r['status']}\t{r['search_url']}" for r in stores))
+        try:
+            z.writestr("price_audit.txt", price_audit(cfg))
+        except Exception as ex:  # noqa: BLE001
+            z.writestr("price_audit.txt", f"(audit failed: {ex})")
         z.writestr("last_search.txt", LAST_SEARCH["text"] or "(no search yet this session)")
         for name in ("deals_error.log", "price_check.log", "image_check.log"):
             z.writestr(name, tail(name))
