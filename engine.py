@@ -37,7 +37,7 @@ from urllib.parse import parse_qs, quote, quote_plus, unquote, urlencode, urljoi
 import requests
 from bs4 import BeautifulSoup
 
-ENGINE_VERSION = 54
+ENGINE_VERSION = 55
 GITHUB_REPO = "M000Nz/Deals"
 GITHUB_API = "https://api.github.com"
 FROZEN = bool(getattr(sys, "frozen", False))                  # True when running as the packaged Deals.exe
@@ -843,7 +843,8 @@ def fetch(url: str, timeout=(5, 8), accept: str = "text/html,application/xhtml+x
 TRACKERS = ("google-analytics", "googletagmanager", "doubleclick", "googlesyndication", "facebook.net",
             "facebook.com/tr", "hotjar", "clarity.ms", "segment.io", "segment.com", "newrelic", "nr-data",
             "tiktok", "pinterest", "criteo", "taboola", "outbrain", "optimizely", "intercom", "zendesk",
-            "livechat", "tawk.to", "bing.com/bat", "snapchat", "klaviyo", "yotpo", "trustpilot")
+            "livechat", "tawk.to", "bing.com/bat", "snapchat", "klaviyo", "yotpo", "trustpilot",
+            "gorgias", "tidio", "crisp.chat", "drift.com", "zdassets", "freshchat", "smooch", "olark")
 
 
 def browser_state_path() -> Path:
@@ -957,14 +958,30 @@ class BrowserEngine:
     async def _verify(self, url: str, wait_s: int = 600) -> bool:
         """Open a real, visible browser on the shop so a person can pass its check. Cookies are kept and reused by the
         hidden browser. Returns True once the window was closed."""
-        kw = {"headless": False, "args": ["--no-first-run"]}
+        # Like a normal browser window: pop-ups stay blocked (Playwright switches that off by default, which lets chat
+        # widgets and ad scripts keep opening and closing tabs).
+        kw = {"headless": False, "args": ["--no-first-run"], "ignore_default_args": ["--disable-popup-blocking"]}
         if self.channel and self.channel != "chromium":
             kw["channel"] = self.channel
         browser = await self.pw.chromium.launch(**kw)
         try:
             ctx = await browser.new_context(user_agent=self.ua, locale="en-AU", timezone_id="Australia/Sydney",
                                             storage_state=self._state(), no_viewport=True)
+            async def gate(route):                           # no chat widgets / trackers while you pass the check
+                if any(t in route.request.url for t in TRACKERS):
+                    await route.abort()
+                else:
+                    await route.continue_()
+            await ctx.route("**/*", gate)
             page = await ctx.new_page()
+
+            async def tidy(p):                               # a stray extra tab from a widget: close it, keep the shop
+                try:
+                    if p is not page and any(t in (p.url or "") for t in TRACKERS):
+                        await p.close()
+                except Exception:  # noqa: BLE001
+                    pass
+            ctx.on("page", lambda p: asyncio.ensure_future(tidy(p)))
             closed = asyncio.Event()
             browser.on("disconnected", lambda *_: closed.set())
             ctx.on("close", lambda *_: closed.set())

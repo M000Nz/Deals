@@ -1,3 +1,4 @@
-54
+55
 https://github.com/M000Nz/Deals
-note: Fixed the error when pressing Verify in Sources
+note: Verify window now blocks pop-ups and chat widgets (such as Gorgias) that kept opening and closing tabs
+note: Chat widgets are also skipped during searches, which is slightly faster
