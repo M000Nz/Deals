@@ -37,7 +37,7 @@ from urllib.parse import parse_qs, quote, quote_plus, unquote, urlencode, urljoi
 import requests
 from bs4 import BeautifulSoup
 
-ENGINE_VERSION = 84
+ENGINE_VERSION = 85
 GITHUB_REPO = "M000Nz/Deals"
 GITHUB_API = "https://api.github.com"
 FROZEN = bool(getattr(sys, "frozen", False))                  # True when running as the packaged Deals.exe
@@ -878,6 +878,19 @@ class BrowserEngine:
         self.loop = self.thread = self.browser = self.pw = self.sem = None
         self.state, self.error, self.channel, self.ua = "idle", "", "", None
         self.lock, self.ready = threading.Lock(), threading.Event()
+        self.busy, self.last = 0, time.time()            # in-use count and last use, for closing it when idle
+        threading.Thread(target=self._idle_watch, daemon=True).start()
+
+    def _idle_watch(self):
+        """The hidden browser (Edge/Chrome plus helper processes) uses a lot of memory. Close it after 4 quiet
+        minutes; it starts again by itself, in a couple of seconds, on the next search that needs it."""
+        while True:
+            time.sleep(30)
+            try:
+                if self.state == "ready" and self.busy == 0 and time.time() - self.last > 240:
+                    self.reset()
+            except Exception:  # noqa: BLE001
+                pass
 
     @staticmethod
     def installed() -> bool:
@@ -1034,9 +1047,14 @@ class BrowserEngine:
                 pass
 
     def verify(self, url: str) -> bool:
-        if not self.start():
-            raise FetchError("nobrowser", self.error or "browser unavailable")
-        return asyncio.run_coroutine_threadsafe(self._verify(url), self.loop).result(660)
+        self.busy += 1
+        try:
+            if not self.start():
+                raise FetchError("nobrowser", self.error or "browser unavailable")
+            return asyncio.run_coroutine_threadsafe(self._verify(url), self.loop).result(660)
+        finally:
+            self.busy -= 1
+            self.last = time.time()
 
     _STEALTH = """
         Object.defineProperty(navigator,'webdriver',{get:()=>undefined});
@@ -1093,14 +1111,20 @@ class BrowserEngine:
                 await ctx.close()
 
     def render(self, url: str, timeout: int = 20, warm: bool = False) -> str:
-        if not self.start():
-            raise FetchError("nobrowser", self.error or "browser unavailable")
-        fut = asyncio.run_coroutine_threadsafe(self._render(url, timeout, warm), self.loop)
+        self.busy += 1
         try:
-            return fut.result(timeout + 20 + (10 if warm else 0))
-        except Exception as e:  # noqa: BLE001
-            msg = str(e).strip().splitlines()
-            raise FetchError("error", (msg[0] if msg else "page failed to load")[:80])
+            if not self.start():
+                raise FetchError("nobrowser", self.error or "browser unavailable")
+            fut = asyncio.run_coroutine_threadsafe(self._render(url, timeout, warm), self.loop)
+            try:
+                return fut.result(timeout + 20 + (10 if warm else 0))
+            except Exception as e:  # noqa: BLE001
+                fut.cancel()                                  # don't leave the page open after we've given up on it
+                msg = str(e).strip().splitlines()
+                raise FetchError("error", (msg[0] if msg else "page failed to load")[:80])
+        finally:
+            self.busy -= 1
+            self.last = time.time()
 
 
 BROWSER = BrowserEngine()
@@ -2694,6 +2718,78 @@ def _find_pass(queries: list[tuple], stores: list[dict], cfg: dict | None = None
     return out
 
 
+def sample_resources() -> str:
+    """One line about how much of the PC this program is holding: threads, Windows handles, GDI/USER objects, memory
+    and helper (browser) processes. Written once a minute to resources.log so a slowdown can be traced."""
+    parts = [time.strftime("%H:%M:%S"), f"threads={threading.active_count()}"]
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            from ctypes import wintypes
+            k32, u32 = ctypes.windll.kernel32, ctypes.windll.user32
+            k32.GetCurrentProcess.restype = wintypes.HANDLE
+            h = k32.GetCurrentProcess()
+            parts.append(f"gdi={u32.GetGuiResources(h, 0)} user={u32.GetGuiResources(h, 1)}")
+            cnt = wintypes.DWORD()
+            k32.GetProcessHandleCount(h, ctypes.byref(cnt))
+            parts.append(f"handles={cnt.value}")
+
+            class PMC(ctypes.Structure):
+                _fields_ = [("cb", wintypes.DWORD), ("PageFaultCount", wintypes.DWORD),
+                            ("PeakWorkingSetSize", ctypes.c_size_t), ("WorkingSetSize", ctypes.c_size_t),
+                            ("QuotaPeakPagedPoolUsage", ctypes.c_size_t), ("QuotaPagedPoolUsage", ctypes.c_size_t),
+                            ("QuotaPeakNonPagedPoolUsage", ctypes.c_size_t), ("QuotaNonPagedPoolUsage", ctypes.c_size_t),
+                            ("PagefileUsage", ctypes.c_size_t), ("PeakPagefileUsage", ctypes.c_size_t)]
+            pm = PMC()
+            pm.cb = ctypes.sizeof(PMC)
+            ctypes.windll.psapi.GetProcessMemoryInfo(h, ctypes.byref(pm), pm.cb)
+            parts.append(f"mem={pm.WorkingSetSize // 1048576}MB")
+
+            class PE(ctypes.Structure):
+                _fields_ = [("dwSize", wintypes.DWORD), ("cntUsage", wintypes.DWORD), ("th32ProcessID", wintypes.DWORD),
+                            ("th32DefaultHeapID", ctypes.c_size_t), ("th32ModuleID", wintypes.DWORD),
+                            ("cntThreads", wintypes.DWORD), ("th32ParentProcessID", wintypes.DWORD),
+                            ("pcPriClassBase", ctypes.c_long), ("dwFlags", wintypes.DWORD),
+                            ("szExeFile", ctypes.c_wchar * 260)]
+            snap = k32.CreateToolhelp32Snapshot(2, 0)
+            kids, mine, n = {}, os.getpid(), 0
+            pe = PE()
+            pe.dwSize = ctypes.sizeof(PE)
+            ok = k32.Process32FirstW(snap, ctypes.byref(pe))
+            while ok:
+                kids.setdefault(pe.th32ParentProcessID, []).append((pe.th32ProcessID, pe.szExeFile))
+                ok = k32.Process32NextW(snap, ctypes.byref(pe))
+            k32.CloseHandle(snap)
+            stack, names = [mine], {}
+            while stack:
+                for pid, exe in kids.get(stack.pop(), []):
+                    n += 1
+                    names[exe.lower()] = names.get(exe.lower(), 0) + 1
+                    stack.append(pid)
+            parts.append(f"child_processes={n} " + ",".join(f"{k}x{v}" for k, v in sorted(names.items())[:5]))
+        except Exception as e:  # noqa: BLE001
+            parts.append(f"(sample failed: {type(e).__name__})")
+    try:
+        parts.append(f"browser={BROWSER.state}")
+    except Exception:  # noqa: BLE001
+        pass
+    return "  ".join(parts)
+
+
+def start_resource_log(every: float = 60.0) -> None:
+    def run():
+        path = DATA_DIR / "resources.log"
+        while True:
+            try:
+                lines = path.read_text(encoding="utf-8").splitlines()[-240:] if path.exists() else []
+                lines.append(sample_resources())
+                path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            except Exception:  # noqa: BLE001
+                pass
+            time.sleep(every)
+    threading.Thread(target=run, daemon=True).start()
+
+
 LAST_SEARCH: dict = {"text": ""}
 
 
@@ -3211,8 +3307,12 @@ def build_diagnostics(data_dir: str | os.PathLike | None = None) -> tuple[str, s
             z.writestr("price_audit.txt", price_audit(cfg))
         except Exception as ex:  # noqa: BLE001
             z.writestr("price_audit.txt", f"(audit failed: {ex})")
+        try:
+            z.writestr("resources_now.txt", sample_resources())
+        except Exception:  # noqa: BLE001
+            pass
         z.writestr("last_search.txt", LAST_SEARCH["text"] or "(no search yet this session)")
-        for name in ("deals_error.log", "price_check.log", "image_check.log"):
+        for name in ("deals_error.log", "price_check.log", "image_check.log", "resources.log"):
             z.writestr(name, tail(name))
         try:                                                   # a few raw OzBargain items, to check which fields the feed offers
             raw = fetch(OZB_BASE + "/deals/feed", timeout=(5, 8), accept="application/rss+xml,application/xml,text/xml,*/*", ua=OZB_UA)

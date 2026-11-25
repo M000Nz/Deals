@@ -1,7 +1,8 @@
-84
+85
 https://github.com/M000Nz/Deals
 note: 'Why these results?' now shows any crossed-out price; with developer mode on it also shows where each result came from (the shop's own search, StaticICE or OzBargain) and the outcome of the price re-check
 note: New quiet link at the bottom of search results: 'Show N hidden listings' reveals everything left out (filtered by your used / accessories settings, too-cheap listings, hidden sites and listings you reported), grouped by reason
+note: Slowdown protection: the hidden browser now closes itself after 4 quiet minutes (it restarts on its own when needed) and abandoned page loads are cancelled; Deals now logs its memory, handles and helper processes once a minute (resources.log) and diagnostics include it
 note: Searches: the early 'most shops are in, stop waiting' cut-off no longer drops browser shops (Amazon...) that are still loading; the search report now shows the engine version and how long each shop took
 note: Searches: shops that need the hidden browser (Amazon, Big W, Officeworks...) now run in their own lane from the start instead of waiting behind every plain shop, so they stop being 'too slow' on busy searches
 note: Amazon: results that show only a 'from $...' price (several sellers or options) are no longer skipped; the developer report shows how many Amazon cards had no price
