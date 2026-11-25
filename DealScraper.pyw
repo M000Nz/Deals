@@ -887,8 +887,28 @@ class StoresDialog(tk.Toplevel):
         app.stores_dialog = self
         self.update_browser_row()
         app.frame(self, "line", height=1).pack(fill="x")
+        srow = app.frame(self)
+        srow.pack(fill="x", padx=10, pady=(8, 8))
+        self.q = tk.StringVar()
+        self.q_entry = app.entry(srow, self.q, width=34)
+        self.q_entry.pack(side="left")
+        self.count = app.label(srow, "", "muted", font=app.f_small)
+        self.count.pack(side="left", padx=10)
+        clear = app.label(srow, "clear", "muted", font=app.f_small, cursor="hand2")
+        clear.bind("<Button-1>", lambda e: self.q.set(""))
+        clear.pack(side="right")
+        self.q.trace_add("write", lambda *a: self._filter_soon())
+        app.frame(self, "line", height=1).pack(fill="x")
         self.sf = ScrollFrame(app, self)
         self.sf.outer.pack(fill="both", expand=True)
+        # Only the rows on screen exist as widgets (a small pool that is re-used while scrolling); with a couple of
+        # hundred shops, one widget set per shop made scrolling stutter and draw blank patches.
+        self.ROW_H = px(42)
+        self.pool, self.rows, self.view, self._first = [], [], [], -1
+        self._vt = self._ft = None
+        self.sf.canvas.configure(yscrollcommand=self._on_yview)
+        self.sf.canvas.bind("<Configure>", self._on_canvas, add="+")
+        self.empty = app.label(self.sf.inner, "", "muted")
         app.frame(self, "line", height=1).pack(fill="x")
         bar = app.frame(self)
         bar.pack(fill="x", padx=10, pady=6)
@@ -951,52 +971,125 @@ class StoresDialog(tk.Toplevel):
             return
         app, con = self.app, E.db()
         region = E.get_settings(con)["region"] or app.region
-        rows = con.execute("SELECT * FROM stores WHERE region=? OR custom=1 ORDER BY custom, name",
-                           (region,)).fetchall()
+        self.rows = [dict(r) for r in con.execute("SELECT * FROM stores WHERE region=? OR custom=1 ORDER BY custom, name",
+                                                  (region,)).fetchall()]
         self.update_head()
-        self.sf.clear()
         app.prune()
-        self._gen += 1
-        gen = self._gen
-        self._loading = app.label(self.sf.inner, "Loading sources...", "muted")
-        self._loading.pack(padx=14, pady=14, anchor="w")
-        self._build_rows(gen, rows, 0)
+        self._apply_filter(keep_scroll=True)
 
-    def _build_rows(self, gen, rows, start, batch=12):
-        """Rows are added a dozen at a time so the window stays responsive and never shows a blank list."""
+    # ---- search + virtual list -------------------------------------------------------------------------------
+    def _status(self, r):
+        st = r.get("status") or "Not tested"
+        if (r.get("skip_until") or 0) > time.time():
+            st += "  \u00b7  paused until " + time.strftime("%d %b", time.localtime(r["skip_until"]))
+        return st
+
+    def _filter_soon(self):
+        if self._ft:
+            self.after_cancel(self._ft)
+        self._ft = self.after(120, lambda: self._apply_filter(keep_scroll=False))
+
+    def _apply_filter(self, keep_scroll):
+        self._ft = None
+        self._gen += 1
+        words = self.q.get().lower().split()
+        if words:
+            self.view = [r for r in self.rows
+                         if all(w in f"{r['name']} {self._status(r)} {r.get('search_url') or ''}".lower() for w in words)]
+        else:
+            self.view = list(self.rows)
+        n, total = len(self.view), len(self.rows)
+        self.count.configure(text=f"{n} of {total}" if words else f"{total} sources")
+        cv = self.sf.canvas
+        frac = cv.yview()[0] if keep_scroll else 0.0
+        self.sf.inner.configure(height=max(1, n * self.ROW_H))
+        self.sf.canvas.configure(scrollregion=(0, 0, 1, max(1, n * self.ROW_H)))
+        if n:
+            self.empty.place_forget()
+        else:
+            self.empty.configure(text="No sources match that search.")
+            self.empty.place(x=14, y=14)
+        cv.yview_moveto(frac)
+        self._first = -1
+        self._show()
+
+    def _on_yview(self, a, b):
+        self.sf.sb.set(a, b)
+        if not self._vt:
+            self._vt = self.after_idle(self._show)
+
+    def _on_canvas(self, e):
+        self._first = -1
+        if not self._vt:
+            self._vt = self.after_idle(self._show)
+
+    def _make_slot(self):
+        app = self.app
+        row = app.frame(self.sf.inner)
+        row.pack_propagate(False)
+        slot = {"row": row, "idx": None, "id": None, "state": None}
+        app.frame(row, "line", height=1).pack(side="bottom", fill="x", padx=12)
+        slot["sw"] = app.switch(row, False, lambda on, sl=slot: self.set_enabled(sl["id"], on))
+        slot["name"] = app.label(row, "")
+        slot["x"] = app.label(row, "\u00d7", "muted", cursor="hand2")
+        slot["x"].bind("<Button-1>", lambda e, sl=slot: self.delete(sl["id"]))
+        slot["test"] = app.button(row, "Test", lambda sl=slot: self.test_one(sl["id"]), pad=(10, 2), style="ghost",
+                                  font=app.f_small)
+        slot["verify"] = app.button(row, "Verify", lambda sl=slot: self.verify_one(sl["id"]), pad=(10, 2),
+                                    style="ghost", font=app.f_small)
+        slot["st"] = app.label(row, "", "muted", font=app.f_small)
+        return slot
+
+    def _show(self):
+        self._vt = None
         try:
-            if gen != self._gen or not self.winfo_exists():
+            if not self.winfo_exists():
                 return
         except tk.TclError:
             return
-        app = self.app
-        if start == 0:
-            try:
-                self._loading.destroy()
-            except tk.TclError:
-                pass
-        for r in rows[start:start + batch]:
-            row = app.frame(self.sf.inner)
-            row.pack(fill="x", padx=12, pady=4)
-            app.switch(row, bool(r["enabled"]), lambda on, i=r["id"]: self.set_enabled(i, on)).pack(side="left")
-            app.label(row, r["name"] + (" (custom)" if r["custom"] else "")).pack(side="left", padx=10)
-            st = r["status"] or "Not tested"
-            if (r["skip_until"] or 0) > time.time():
-                st += "  \u00b7  paused until " + time.strftime("%d %b", time.localtime(r["skip_until"]))
-            mark = {"v": "\u2713", "x": "\u2717", "-": "\u00b7"}[E.status_mark(st)]
+        cv, H = self.sf.canvas, self.ROW_H
+        n = len(self.view)
+        need = min(n, cv.winfo_height() // H + 4)
+        while len(self.pool) < need:
+            self.pool.append(self._make_slot())
+        top = int(cv.canvasy(0) // H)
+        first = max(0, min(top - 1, max(0, n - need)))
+        size = max(1, len(self.pool))
+        used = set()
+        for i in range(first, min(n, first + need)):
+            slot = self.pool[i % size]
+            used.add(id(slot))
+            if slot["idx"] != i or slot.get("gen") != self._gen:
+                self._bind(slot, i)
+        for slot in self.pool:
+            if id(slot) not in used and slot["idx"] is not None:
+                slot["row"].place_forget()
+                slot["idx"] = None
+        self._first = first
+
+    def _bind(self, slot, i):
+        r = self.view[i]
+        slot["idx"], slot["id"], slot["gen"] = i, r["id"], self._gen
+        slot["row"].place(x=0, y=i * self.ROW_H, relwidth=1, height=self.ROW_H)
+        slot["sw"].set(bool(r["enabled"]))
+        slot["name"].configure(text=r["name"] + (" (custom)" if r["custom"] else ""))
+        st = self._status(r)
+        mark = {"v": "\u2713", "x": "\u2717", "-": "\u00b7"}[E.status_mark(st)]
+        slot["st"].configure(text=f"{mark} {st}")
+        flagged = any(w in st.lower() for w in ("bot", "blocked", "protection"))
+        state = (bool(r["custom"]), flagged)
+        if slot["state"] != state:
+            slot["state"] = state
+            for k in ("x", "test", "verify", "st"):
+                slot[k].pack_forget()
+            slot["sw"].pack(side="left", padx=(12, 0))
+            slot["name"].pack(side="left", padx=10)
             if r["custom"]:
-                x = app.label(row, "\u00d7", "muted", cursor="hand2")
-                x.bind("<Button-1>", lambda e, i=r["id"]: self.delete(i))
-                x.pack(side="right")
-            app.button(row, "Test", lambda i=r["id"]: self.test_one(i), pad=(10, 2), style="ghost",
-                       font=app.f_small).pack(side="right")
-            if any(w in (st or "").lower() for w in ("bot", "blocked", "protection")):
-                app.button(row, "Verify", lambda i=r["id"]: self.verify_one(i), pad=(10, 2), style="ghost",
-                           font=app.f_small).pack(side="right", padx=(0, 4))
-            app.label(row, f"{mark} {st}", "muted", font=app.f_small).pack(side="right", padx=8)
-            app.frame(self.sf.inner, "line", height=1).pack(fill="x", padx=12)
-        if start + batch < len(rows):
-            self.after(8, lambda: self._build_rows(gen, rows, start + batch))
+                slot["x"].pack(side="right", padx=(0, 12))
+            slot["test"].pack(side="right")
+            if flagged:
+                slot["verify"].pack(side="right", padx=(0, 4))
+            slot["st"].pack(side="right", padx=8)
 
     def test_one(self, i):
         self.app.test_store_one(i, self.refresh, host=self)
@@ -1008,6 +1101,9 @@ class StoresDialog(tk.Toplevel):
         con = E.db()
         con.execute("UPDATE stores SET enabled=? WHERE id=?", (1 if on else 0, i))
         con.commit()
+        for r in self.rows:                       # keep the list in memory in step, so a re-used row shows the right switch
+            if r["id"] == i:
+                r["enabled"] = 1 if on else 0
         self.update_head()
 
     def delete(self, i):
