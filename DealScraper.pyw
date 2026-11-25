@@ -157,7 +157,7 @@ def ensure_deps():
 ensure_deps()
 import engine as E  # noqa: E402
 
-if getattr(E, "ENGINE_VERSION", 0) < 89:
+if getattr(E, "ENGINE_VERSION", 0) < 90:
     _r = tk.Tk()
     _r.withdraw()
     messagebox.showerror("Deals", "engine.py is out of date.\n\nReplace it with the new engine.py from the "
@@ -2731,11 +2731,29 @@ class App(tk.Tk):
                         if offers:
                             self.fixed, self.query = (q, q2), q2
                 self.q.put(lambda: gen == self._sgen and self.show_results(offers, report))
+                late = getattr(report, "timed_out", 0)
+                if late and not cancel.is_set() and gen == self._sgen:      # shops that missed out get a second go, quietly
+                    self.q.put(lambda: gen == self._sgen and self.set_status(f"checking {late} slower shops..."))
+                    got = E.second_pass(self.query, stores, offers, report, cfg)
+                    if got and gen == self._sgen:
+                        self.q.put(lambda: gen == self._sgen and self.second_pass_done(got))
+                    else:
+                        self.q.put(lambda: gen == self._sgen and self.set_status("ready"))
             except Exception:  # noqa: BLE001
                 log_error(traceback.format_exc())
                 self.q.put(lambda: gen == self._sgen and self.show_results([], []))
 
         threading.Thread(target=work, daemon=True).start()
+
+    def second_pass_done(self, got):
+        """The slow shops have answered: add what they found (keeping your place on the page)."""
+        merged, rep, added = got
+        self.set_status("ready")
+        if self.view != "results" or not added:
+            return
+        self._stream = True                              # makes show_results keep the scroll position
+        self.show_results(merged, rep)
+        self.toast(f"{added} more result{'s' if added != 1 else ''} from the slower shops")
 
     def begin_search(self):
         """A new search always wins: the one still running is told to stop and its late answers are ignored."""

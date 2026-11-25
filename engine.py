@@ -37,7 +37,7 @@ from urllib.parse import parse_qs, quote, quote_plus, unquote, urlencode, urljoi
 import requests
 from bs4 import BeautifulSoup
 
-ENGINE_VERSION = 89
+ENGINE_VERSION = 90
 GITHUB_REPO = "M000Nz/Deals"
 GITHUB_API = "https://api.github.com"
 FROZEN = bool(getattr(sys, "frozen", False))                  # True when running as the packaged Deals.exe
@@ -2451,6 +2451,8 @@ class Report(list):
     words: dict = {}  # word -> how many listings (before filtering) used it
     ozb_titles: list = []      # what the OzBargain feeds returned (for the developer report)
     hidden_offers: list = []   # (offer, reason) for listings kept out of the results: "reported" | "site" | "cheap"
+    second_tried = 0           # slow shops given a second go after the first results were shown
+    second_added = 0           # listings that second go found
 
 
 def blocked_words(cfg: dict | None) -> list[str]:
@@ -2870,6 +2872,8 @@ def _note_search(queries: list[tuple], out: dict) -> None:
         lines.append(f"Filtered out: {rep.junk} too cheap to be the product (cases, parts), {rep.hidden} from hidden sites.")
         lines.append(f"Not searched: {rep.skipped} (wrong category), {rep.paused} paused after repeated failures, "
                      f"{rep.timed_out} too slow." + ("  Widened to every shop." if rep.widened else ""))
+        if rep.second_tried:
+            lines.append(f"Second pass: {rep.second_tried} slow shops tried again after the first results, {rep.second_added} new listings added.")
         lines += ["", "SHOPS (listings returned)"]
         for r in sorted(rep, key=lambda r: (-r.get("raw", 0), r["name"])):
             ms = r.get("ms") or 0
@@ -2944,6 +2948,42 @@ def find_offers_many(queries: list[tuple], stores: list[dict], cfg: dict | None 
             pass
     _note_search(queries, out)
     return out
+
+
+SECOND_PASS_MAX = 18
+
+
+def second_pass(keywords: str, stores: list[dict], offers: list, report, cfg: dict | None = None, deadline: float = 40.0):
+    """After the first results are on screen: give the shops that were 'too slow' another go, on their own (so nothing
+    else is competing for the hidden browser). Returns (merged offers, updated report, number of new listings), or None."""
+    late_ids = {r["id"] for r in report if r.get("err") == "timeout"}
+    todo = [st for st in stores if st["id"] in late_ids]
+    if not todo or _cancelled(cfg):
+        return None
+    cats = detect_categories(keywords)
+    todo.sort(key=lambda s: (not _is_marketplace(s),) + _scan_order(s, cats))
+    todo = todo[:SECOND_PASS_MAX]
+    c2 = dict(cfg or {}, defer_verify="1", scope="all")
+    ranked2, rep2 = _find_pass([("q", keywords)], todo, c2, None, deadline, False)["q"]
+    if _cancelled(cfg):
+        return None
+    have = {o.url for o in offers}
+    new = [o for o in ranked2 if o.url not in have]
+    merged = sorted(list(offers) + new, key=lambda o: (-o.score, o.price))
+    tried = {st["id"] for st in todo}
+    rep = Report([r for r in report if r["id"] not in tried] + list(rep2))
+    for a in ("paused", "skipped", "widened", "words", "ozb_titles"):
+        setattr(rep, a, getattr(report, a, getattr(Report, a)))
+    rep.junk, rep.hidden = report.junk + rep2.junk, report.hidden + rep2.hidden
+    seen_h = {o.url for o, _ in report.hidden_offers}
+    rep.hidden_offers = list(report.hidden_offers) + [(o, w) for o, w in rep2.hidden_offers if o.url not in seen_h]
+    rep.timed_out = (report.timed_out - len(tried)) + rep2.timed_out
+    rep.second_tried, rep.second_added = len(tried), len(new)
+    try:
+        _note_search([("q", keywords)], {"q": (merged, rep)})
+    except Exception:  # noqa: BLE001
+        pass
+    return merged, rep, len(new)
 
 
 def find_offers(keywords: str, stores: list[dict], cfg: dict | None = None, workers: int | None = None,
