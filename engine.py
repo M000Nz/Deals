@@ -37,7 +37,7 @@ from urllib.parse import parse_qs, quote, quote_plus, unquote, urlencode, urljoi
 import requests
 from bs4 import BeautifulSoup
 
-ENGINE_VERSION = 80
+ENGINE_VERSION = 81
 GITHUB_REPO = "M000Nz/Deals"
 GITHUB_API = "https://api.github.com"
 FROZEN = bool(getattr(sys, "frozen", False))                  # True when running as the packaged Deals.exe
@@ -1757,6 +1757,10 @@ def scrape_ozb(store: dict, query: str, full: str | None = None) -> list[Offer]:
         one = _slug([t])
         if len(one) >= 3 and not one.isdigit() and one != slug:
             feeds.append(f"{OZB_BASE}/tag/{one}/feed")
+    # A busy tag (like "garmin" in Black Friday week) fills the first page of its feed with the newest posts, pushing
+    # slightly older live deals off it, so also read the second page of the two most specific tags.
+    tags = [f for f in feeds if "/tag/" in f]
+    feeds += [t + "?page=1" for t in tags[:2]]
     out, seen, ok, last = [], set(), False, None
     for url in dict.fromkeys(feeds):
         try:
