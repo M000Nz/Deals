@@ -37,7 +37,7 @@ from urllib.parse import parse_qs, quote, quote_plus, unquote, urlencode, urljoi
 import requests
 from bs4 import BeautifulSoup
 
-ENGINE_VERSION = 66
+ENGINE_VERSION = 67
 GITHUB_REPO = "M000Nz/Deals"
 GITHUB_API = "https://api.github.com"
 FROZEN = bool(getattr(sys, "frozen", False))                  # True when running as the packaged Deals.exe
@@ -305,7 +305,7 @@ STORE_CATS = {
 }
 
 CATEGORY_WORDS = {
-    "tech": "laptop notebook macbook ipad tablet phone iphone android smartphone galaxy pixel monitor display keyboard mouse "
+    "tech": "wifi wireless mesh extender ethernet tplink tp archer deco eero netgear ubiquiti unifi mikrotik laptop notebook macbook ipad tablet phone iphone android smartphone galaxy pixel monitor display keyboard mouse "
             "headphones headphone earbuds airpods speaker soundbar tv television router modem ssd hdd nvme ram gpu cpu "
             "graphics motherboard processor charger cable usb hdmi camera lens drone gopro printer scanner webcam microphone "
             "smartwatch watch fitbit garmin coros suunto polar amazfit wahoo whoop oura  kindle projector nas switch vr oculus quest powerbank sony samsung lg apple bose sennheiser jbl logitech asus acer msi lenovo dell hp nvidia amd intel canon nikon panasonic philips xiaomi google huawei oppo oneplus anker ugreen tplink netgear ubiquiti seagate wd sandisk kingston corsair razer steelseries",
@@ -2273,7 +2273,24 @@ def drop_junk_prices(offers: list[Offer], ratio: float = JUNK_RATIO) -> tuple[li
     return keep, len(offers) - len(keep)
 
 
-POOL_WORKERS = 8
+POOL_WORKERS = 12
+
+
+def _scan_order(st: dict, cats: set) -> tuple:
+    """Who gets searched first. The queue used to run in alphabetical order, so when time ran out the shops
+    from G to Z (Mwave, Scorptec, Umart, StaticICE...) never got a turn. Now: price-comparison sites, then shops that
+    sell this kind of product, then the rest - and quick plain-web shops before the ones needing the slow browser."""
+    url = (st.get("search_url") or "") + (st.get("alt_url") or "")
+    sc = set((st.get("cats") or "all").split())
+    if "staticice." in url or "getprice." in url or url.startswith("ozb:"):
+        tier = 0
+    elif cats and sc & cats:
+        tier = 1
+    elif sc & {"all", "general"}:
+        tier = 2
+    else:
+        tier = 3
+    return (tier + (4 if st.get("use_browser") else 0), st.get("name", ""))
 DEAD_AFTER = 3          # a store that fails this many times in a row is paused for a day (then 2, 4, 7 days)
 FAIL_KINDS = {"blocked", "notfound", "needsjs", "botcheck", "nobrowser", "error"}
 
@@ -2425,7 +2442,11 @@ def _find_pass(queries: list[tuple], stores: list[dict], cfg: dict | None = None
     picked = {k: select_stores(live, kw, cfg) for k, kw in queries}
     total = sum(len(v) for v in picked.values())
     ex = ThreadPoolExecutor(max_workers=max(1, min(POOL_WORKERS, total)))
-    futs = {ex.submit(_scan_one, dict(st), kw, cfg): (k, st) for k, kw in queries for st in picked[k]}
+    futs = {}
+    for k, kw in queries:
+        cats = detect_categories(kw)
+        for st in sorted(picked[k], key=lambda s: _scan_order(s, cats)):
+            futs[ex.submit(_scan_one, dict(st), kw, cfg)] = (k, st)
     done, t0, cut, pending = 0, time.time(), deadline, set(futs)
     last_partial, sent = 0.0, None
     try:
@@ -2483,7 +2504,8 @@ def _find_pass(queries: list[tuple], stores: list[dict], cfg: dict | None = None
             pass
         report = Report({"id": s["id"], "name": s["name"],
                          "status": status_text(len(offs), err, bool(s.get("_browser_used"))),
-                         "raw": len(offs), "err": err} for s, offs, err in results[k])
+                         "raw": len(offs), "err": err, "sample": [o.title for o in offs[:2]]}
+                        for s, offs, err in results[k])
         report.extend({"id": st["id"], "name": st["name"], "status": "Too slow - skipped this time",
                        "raw": 0, "err": "timeout"} for st in late[k])
         report.junk, report.hidden = junk, len(raw) - len(visible)
@@ -2527,6 +2549,11 @@ def _note_search(queries: list[tuple], out: dict) -> None:
         lines += ["", "SHOPS (listings returned)"]
         for r in sorted(rep, key=lambda r: (-r.get("raw", 0), r["name"])):
             lines.append(f"- {r['name']}: {r.get('raw', 0)}  {r.get('status', '')}")
+        if rel < 3:                                    # thin result: show what the shops actually sent back
+            lines += ["", "WHAT THE SHOPS SENT BACK (first two listings of each)"]
+            for r in sorted(rep, key=lambda r: -r.get("raw", 0))[:25]:
+                for t in r.get("sample") or []:
+                    lines.append(f"- {r['name']}: {t[:90]}")
         lines += ["", "TOP RESULTS (score, price, shop, title)"]
         for o in ranked[:25]:
             lines.append(f"- {o.score:>3}  ${o.price:,.2f}  {o.store}  {o.title[:90]}")

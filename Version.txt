@@ -1,5 +1,8 @@
-66
+67
 https://github.com/M000Nz/Deals
+note: Searches no longer run out of time on the shops that matter: shops are now searched price-comparison sites first, then shops that sell that kind of product, then the rest (it used to be alphabetical, so Mwave, Scorptec, Umart and StaticICE were often skipped), with 12 searches at once
+note: Router, Wi-Fi and mesh brand words (TP-Link, Archer, Deco, Netgear...) now count as tech so those searches go to tech shops
+note: 'Why these results?' now shows what the shops sent back when few results match
 note: Lighter and smoother: the database is now set up once instead of on every call, product-review checks fetch fewer pages at a time, live results redraw at most every few seconds, graphs redraw only when resized, and the picture cache no longer empties all at once
 note: New 'Why these results?' button under a search shows which shops answered, how many listings came back and what was filtered; the same report goes into diagnostics (last_search.txt)
 note: New Alerts window: plain step-by-step instructions for the phone (ntfy), Discord, Telegram and email options, a button that makes you a private phone name, and a Send a test button on each that tells you if it worked or why not
