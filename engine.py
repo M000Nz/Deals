@@ -37,7 +37,7 @@ from urllib.parse import parse_qs, quote, quote_plus, unquote, urlencode, urljoi
 import requests
 from bs4 import BeautifulSoup
 
-ENGINE_VERSION = 87
+ENGINE_VERSION = 88
 GITHUB_REPO = "M000Nz/Deals"
 GITHUB_API = "https://api.github.com"
 FROZEN = bool(getattr(sys, "frozen", False))                  # True when running as the packaged Deals.exe
@@ -1850,9 +1850,10 @@ def _amazon_offers(soup, base_url: str) -> list[Offer]:
         title = ""
         if h2 is not None:
             title = (h2.get("aria-label") or h2.get_text(" ", strip=True) or "").strip()
-        if not title:
-            img = card.select_one("img.s-image")
-            title = (img.get("alt") if img is not None else "") or ""
+        img0 = card.select_one("img.s-image")
+        alt = re.sub(r"\s+", " ", (img0.get("alt") if img0 is not None else "") or "").strip()
+        if not title or (len(title) < 25 and len(alt) > len(title) + 8):
+            title = alt or title           # some cards show only the brand ("COROS") as heading; the picture label has the full name
         title = re.sub(r"\s+", " ", title).strip()
         if len(title) < 4:
             continue
