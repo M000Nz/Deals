@@ -37,7 +37,7 @@ from urllib.parse import parse_qs, quote, quote_plus, unquote, urlencode, urljoi
 import requests
 from bs4 import BeautifulSoup
 
-ENGINE_VERSION = 85
+ENGINE_VERSION = 86
 GITHUB_REPO = "M000Nz/Deals"
 GITHUB_API = "https://api.github.com"
 FROZEN = bool(getattr(sys, "frozen", False))                  # True when running as the packaged Deals.exe
@@ -2441,6 +2441,11 @@ def _scan_order(st: dict, cats: set) -> tuple:
     else:
         tier = 3
     return (tier, st.get("name", ""))
+
+
+def _is_marketplace(st: dict) -> bool:
+    """Shops that carry almost everything (Amazon...). They go first in the slow browser lane and the search waits for them."""
+    return "amazon." in (st.get("search_url") or "").lower()
 DEAD_AFTER = 3          # a store that fails this many times in a row is paused for a day (then 2, 4, 7 days)
 FAIL_KINDS = {"blocked", "notfound", "needsjs", "botcheck", "nobrowser", "error"}
 
@@ -2607,15 +2612,17 @@ def _find_pass(queries: list[tuple], stores: list[dict], cfg: dict | None = None
     ex = ThreadPoolExecutor(max_workers=max(1, min(POOL_WORKERS, total)))
     exb = ThreadPoolExecutor(max_workers=4)             # shops that need the hidden browser get their own lane, so they
     use_b = browser_wanted(cfg)                         # (Amazon, Big W, Officeworks...) start at once and don't wait behind every plain shop
-    futs, bfuts = {}, set()
+    futs, bfuts, pfuts = {}, set(), set()
     for k, kw in queries:
         cats = detect_categories(kw)
-        for st in sorted(picked[k], key=lambda s: _scan_order(s, cats)):
+        for st in sorted(picked[k], key=lambda s: (not _is_marketplace(s),) + _scan_order(s, cats)):
             browsery = use_b and st.get("use_browser")
             fut = (exb if browsery else ex).submit(_scan_one, dict(st), kw, cfg)
             futs[fut] = (k, st)
             if browsery:
                 bfuts.add(fut)
+                if _is_marketplace(st):
+                    pfuts.add(fut)
     done, t0, cut, pending = 0, time.time(), deadline, set(futs)
     last_partial, sent = 0.0, None
     try:
@@ -2642,7 +2649,7 @@ def _find_pass(queries: list[tuple], stores: list[dict], cfg: dict | None = None
                 except Exception:  # noqa: BLE001
                     pass
             el = time.time() - t0
-            if cut == deadline and total and done >= 0.85 * total and el >= 5 and (el >= 30 or not (pending & bfuts)):
+            if cut == deadline and total and done >= 0.85 * total and el >= 5 and (el >= 40 or not (pending & pfuts)) and (el >= 30 or not (pending & bfuts)):
                 # most stores are in: don't wait long for the stragglers - but browser shops (Amazon...) are slow by
                 # nature, so they get the full time unless it is already well over half a minute
                 cut = min(deadline, el + max(3.0, el * 0.4))

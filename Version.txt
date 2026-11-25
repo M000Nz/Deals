@@ -1,5 +1,6 @@
-85
+86
 https://github.com/M000Nz/Deals
+note: Amazon (and other big marketplaces) now start first and the search waits for them, so products only Amazon stocks (new watches, etc.) are no longer skipped as 'too slow'
 note: 'Why these results?' now shows any crossed-out price; with developer mode on it also shows where each result came from (the shop's own search, StaticICE or OzBargain) and the outcome of the price re-check
 note: New quiet link at the bottom of search results: 'Show N hidden listings' reveals everything left out (filtered by your used / accessories settings, too-cheap listings, hidden sites and listings you reported), grouped by reason
 note: Slowdown protection: the hidden browser now closes itself after 4 quiet minutes (it restarts on its own when needed) and abandoned page loads are cancelled; Deals now logs its memory, handles and helper processes once a minute (resources.log) and diagnostics include it
