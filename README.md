@@ -166,7 +166,7 @@ python selftest.py            # checks the price reader against saved example pa
 
 1. Raise `ENGINE_VERSION` in `engine.py`, and the matching check in `DealScraper.pyw`.
 2. Put the version on the first line of `Version.txt`, the repository URL on the second, then one `note:` line per change.
-3. Commit and push, then run the **release** workflow (Actions → *Run workflow*) with the tag, e.g. `v53`.
+3. Commit and push, then run the **release** workflow (Actions → *Run workflow*) with the tag, e.g. `v54`.
 
 The workflow builds the app with PyInstaller, runs `--selftest` on the built exe, builds the installer with Inno Setup and publishes `Deals-Setup.exe` with its `.sha256` to the release. `build_exe.bat` is only for local test builds.
 
