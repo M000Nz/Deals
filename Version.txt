@@ -1,5 +1,6 @@
-90
+91
 https://github.com/M000Nz/Deals
+note: Watchlist cards: the low/high, usual price and buy-or-wait text now sit to the left of the graph, and the graph is taller
 note: Second pass: shops that were 'too slow' get another go in the background once the first results are showing; anything they find is added to the list (with a small message), keeping your place on the page
 note: New shop: SIHOO Australia (their own site - M57 Pro and the rest of the range, read from the shop's product feed)
 note: Amazon results whose heading shows only the brand now use the full product name from the picture label

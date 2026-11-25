@@ -157,7 +157,7 @@ def ensure_deps():
 ensure_deps()
 import engine as E  # noqa: E402
 
-if getattr(E, "ENGINE_VERSION", 0) < 90:
+if getattr(E, "ENGINE_VERSION", 0) < 91:
     _r = tk.Tk()
     _r.withdraw()
     messagebox.showerror("Deals", "engine.py is out of date.\n\nReplace it with the new engine.py from the "
@@ -3863,14 +3863,18 @@ class App(tk.Tk):
         mid.grid(row=0, column=2, sticky="we")
         hist = E.price_history(con, r["id"])
         reg = E.regular_price(con, r["id"])
-        Chart(self, mid, [h["price"] for h in hist][-30:], height=60, on_click=lambda i=r["id"]: HistoryDialog(self, i),
-              lines=[(r["max_price"], "target"), (reg[0] if reg else None, "usual")]).pack(fill="x")
+        txt = self.frame(mid)                            # the figures sit to the left of the graph; the graph uses the height
+        txt.pack(side="left", anchor="n", padx=(0, 16))
+        ch = Chart(self, mid, [h["price"] for h in hist][-30:], height=120, on_click=lambda i=r["id"]: HistoryDialog(self, i),
+                   lines=[(r["max_price"], "target"), (reg[0] if reg else None, "usual")])
+        ch.cv.configure(width=px(290))
+        ch.pack(side="right", fill="both", expand=True)
         parts = history_text(sym, hist).split("\n")
-        self.label(mid, parts[0], "muted", font=self.f_small).pack(anchor="w", pady=(4, 0))
+        self.label(txt, parts[0], "muted", font=self.f_small, justify="left", wraplength=px(230)).pack(anchor="w")
         if len(parts) > 1:
             tail = parts[1].split(": ", 1)[-1]
-            self.label(mid, parts[1], "accent" if tail.startswith("\u25bc") else "alert" if tail.startswith("\u25b2") else "muted",
-                       font=self.f_small).pack(anchor="w")
+            self.label(txt, parts[1], "accent" if tail.startswith("\u25bc") else "alert" if tail.startswith("\u25b2") else "muted",
+                       font=self.f_small, justify="left", wraplength=px(230)).pack(anchor="w")
         if reg:
             line = f"Usual price (not on sale): {E.money(sym, reg[0])}"
             tone = "muted"
@@ -3880,10 +3884,11 @@ class App(tk.Tk):
             elif r["best_price"] and r["best_price"] > reg[0] * 1.02:
                 line += f"   \u25b2 now {100 * (r['best_price'] - reg[0]) / reg[0]:.0f}% above"
                 tone = "alert"
-            self.label(mid, line, tone, font=self.f_small).pack(anchor="w")
+            self.label(txt, line, tone, font=self.f_small, justify="left", wraplength=px(230)).pack(anchor="w")
         elif hist:
-            self.label(mid, "Usual price: learning - needs a few more checks", "muted", font=self.f_small).pack(anchor="w")
-        self.advice_lines(mid, E.buy_advice(r["best_price"], reg[0] if reg else None, hist, sym=sym), 520)
+            self.label(txt, "Usual price: learning - needs a few more checks", "muted", font=self.f_small,
+                       justify="left", wraplength=px(230)).pack(anchor="w")
+        self.advice_lines(txt, E.buy_advice(r["best_price"], reg[0] if reg else None, hist, sym=sym), px(230))
         right = self.frame(row)
         right.grid(row=0, column=4, sticky="ne")
         if r["best_url"]:
