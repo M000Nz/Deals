@@ -2528,6 +2528,11 @@ def _scan_order(st: dict, cats: set) -> tuple:
 def _is_marketplace(st: dict) -> bool:
     """Shops that carry almost everything (Amazon...). They go first in the slow browser lane and the search waits for them."""
     return "amazon." in (st.get("search_url") or "").lower()
+# The big, well-known shops are always tried, even after repeated failures: people expect to see them, and a block
+# on them is often temporary.
+ALWAYS_TRY = {"jb hi-fi", "harvey norman", "bing lee", "the good guys", "officeworks", "kogan", "myer", "david jones",
+              "big w", "target au", "bunnings", "woolworths", "coles", "chemist warehouse", "kmart", "costco au",
+              "amazon au", "catch", "betta home living", "appliances online", "rebel sport", "mwave", "scorptec", "umart"}
 DEAD_AFTER = 3          # a store that fails this many times in a row is paused for a day (then 2, 4, 7 days)
 FAIL_KINDS = {"blocked", "notfound", "needsjs", "botcheck", "nobrowser", "error"}
 
@@ -2688,7 +2693,8 @@ def _find_pass(queries: list[tuple], stores: list[dict], cfg: dict | None = None
     Returns {key: (offers ranked by relevance, Report)}. Slow stragglers are dropped after `deadline` seconds."""
     words, now = blocked_words(cfg), time.time()
     usable = [st for st in stores if not any(w in f"{st['name']} {st['search_url']}".lower() for w in words)]
-    paused = [st for st in usable if skip_dead and (st.get("skip_until") or 0) > now]
+    paused = [st for st in usable if skip_dead and (st.get("skip_until") or 0) > now
+              and st["name"].lower() not in ALWAYS_TRY]
     live = [st for st in usable if st not in paused]
     results = {k: [] for k, _ in queries}
     late = {k: [] for k, _ in queries}
