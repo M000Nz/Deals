@@ -1,5 +1,6 @@
-91
+92
 https://github.com/M000Nz/Deals
+note: A large 'Still searching' banner now sits at the top of the results (with a live count and progress bar) while shops are still answering, and again while slow shops get their second go
 note: Watchlist cards: the low/high, usual price and buy-or-wait text now sit to the left of the graph, and the graph is taller
 note: Second pass: shops that were 'too slow' get another go in the background once the first results are showing; anything they find is added to the list (with a small message), keeping your place on the page
 note: New shop: SIHOO Australia (their own site - M57 Pro and the rest of the range, read from the shop's product feed)

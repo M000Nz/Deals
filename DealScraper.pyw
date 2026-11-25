@@ -157,7 +157,7 @@ def ensure_deps():
 ensure_deps()
 import engine as E  # noqa: E402
 
-if getattr(E, "ENGINE_VERSION", 0) < 91:
+if getattr(E, "ENGINE_VERSION", 0) < 92:
     _r = tk.Tk()
     _r.withdraw()
     messagebox.showerror("Deals", "engine.py is out of date.\n\nReplace it with the new engine.py from the "
@@ -1515,6 +1515,8 @@ class App(tk.Tk):
         self._digest_busy, self._ml_busy, self._ml_pending = False, False, []
         self._pc_busy, self._pc_base, self._pc_dots = None, "", 0
         self._pc_banner = self._pc_title = None
+        self._sb_mode, self._sb_frame, self._sb_title, self._sb_sub, self._sb_bar = None, None, None, None, None
+        self._sb_done, self._sb_total, self._sb_n, self._sb_t0, self._sb_dots, self._sb_anim = 0, 0, 0, 0.0, 0, False
         self._pc_redraw = False
         self.show_hidden, self.hidden_offers = False, []      # "Show hidden listings" at the bottom of the results
         self._sgen, self._scancel = 0, None               # which search is current, and how to stop the one before
@@ -1900,8 +1902,61 @@ class App(tk.Tk):
         if self.searching and total:
             self.load_sub.configure(text=f"{done} of {total} sources checked")
             self.load_bar.set(done / total)
-            if self._stream:
-                self.info_var.set(f"Still searching - {done} of {total} sources answered. These are the best results so far.")
+            self._sb_done, self._sb_total = done, total
+            if self._sb_mode == "search":
+                self.update_sb()
+
+    def start_sb(self, mode, n=0):
+        """The big 'still working' banner at the top of the results (first search, or the second go at slow shops)."""
+        self._sb_mode, self._sb_n, self._sb_t0 = mode, n, time.time()
+        if not self._sb_anim:
+            self._sb_anim = True
+            self.after(400, self.animate_sb)
+
+    def end_sb(self):
+        self._sb_mode = None
+        try:
+            if self._sb_frame is not None:
+                self._sb_frame.destroy()
+        except tk.TclError:
+            pass
+        self._sb_frame = None
+
+    def animate_sb(self):
+        if not self._sb_mode:
+            self._sb_anim = False
+            return
+        self._sb_dots = (self._sb_dots + 1) % 4
+        self.update_sb()
+        self.after(400, self.animate_sb)
+
+    def update_sb(self):
+        if self._sb_frame is None or not self._sb_mode:
+            return
+        dots = "." * self._sb_dots
+        try:
+            if self._sb_mode == "search":
+                self._sb_title.configure(text="Still searching" + dots)
+                self._sb_sub.configure(text=f"{self._sb_done} of {self._sb_total} sources answered  -  showing the best results so far")
+                self._sb_bar.set(self._sb_done / self._sb_total if self._sb_total else 0)
+            else:
+                self._sb_title.configure(text="Checking the slower shops" + dots)
+                self._sb_sub.configure(text=f"{self._sb_n} shops were too slow the first time  -  giving them another go, "
+                                            "anything new will be added here")
+                self._sb_bar.set(min(0.95, (time.time() - self._sb_t0) / 40.0))
+        except tk.TclError:
+            pass
+
+    def build_sb(self, parent):
+        self._sb_frame = box = self.frame(parent)
+        box.pack(fill="x", padx=16, pady=(14, 6))
+        self._sb_title = self.label(box, "", "accent", font=self.f_page, anchor="center")
+        self._sb_title.pack(fill="x")
+        self._sb_sub = self.label(box, "", "muted", anchor="center")
+        self._sb_sub.pack(fill="x", pady=(2, 8))
+        self._sb_bar = self.reg(ui.ProgressBar(self, box, 460, 8), "redraw")
+        self._sb_bar.pack()
+        self.update_sb()
 
     def on_search_partial(self, offers, done, total, query):
         """The first good results appear while slower shops are still answering."""
@@ -1910,7 +1965,10 @@ class App(tk.Tk):
         sig = [(o.url, o.price) for o in offers[:PAGE]]
         first = not self._stream
         self._stream = True
-        self.info_var.set(f"Still searching - {done} of {total} sources answered. These are the best results so far.")
+        self._sb_done, self._sb_total = done, total
+        if self._sb_mode != "search":
+            self.start_sb("search")
+        self.info_var.set("Searching...")
         if sig == self._stream_sig:
             return
         now = time.time()
@@ -2730,24 +2788,27 @@ class App(tk.Tk):
                             return
                         if offers:
                             self.fixed, self.query = (q, q2), q2
-                self.q.put(lambda: gen == self._sgen and self.show_results(offers, report))
                 late = getattr(report, "timed_out", 0)
-                if late and not cancel.is_set() and gen == self._sgen:      # shops that missed out get a second go, quietly
-                    self.q.put(lambda: gen == self._sgen and self.set_status(f"checking {late} slower shops..."))
+                again = bool(late) and not cancel.is_set()
+                if again:
+                    self.q.put(lambda: gen == self._sgen and self.start_sb("second", late))
+                self.q.put(lambda: gen == self._sgen and self.show_results(offers, report))
+                if again and gen == self._sgen:                 # shops that missed out get a second go, in the background
                     got = E.second_pass(self.query, stores, offers, report, cfg)
                     if got and gen == self._sgen:
                         self.q.put(lambda: gen == self._sgen and self.second_pass_done(got))
                     else:
-                        self.q.put(lambda: gen == self._sgen and self.set_status("ready"))
+                        self.q.put(lambda: gen == self._sgen and self.end_sb())
             except Exception:  # noqa: BLE001
                 log_error(traceback.format_exc())
-                self.q.put(lambda: gen == self._sgen and self.show_results([], []))
+                self.q.put(lambda: gen == self._sgen and (self.end_sb(), self.show_results([], [])))
 
         threading.Thread(target=work, daemon=True).start()
 
     def second_pass_done(self, got):
         """The slow shops have answered: add what they found (keeping your place on the page)."""
         merged, rep, added = got
+        self.end_sb()
         self.set_status("ready")
         if self.view != "results" or not added:
             return
@@ -2760,6 +2821,7 @@ class App(tk.Tk):
         if self._scancel is not None:
             self._scancel.set()
         self._sgen += 1
+        self._sb_mode = None
         self._scancel = threading.Event()
         self.searching = True
         self.hide_loading()
@@ -2832,6 +2894,8 @@ class App(tk.Tk):
 
     def show_results(self, offers, report):
         self.searching = False
+        if self._sb_mode == "search":
+            self._sb_mode = None
         was_streaming, self._stream = self._stream, False
         keep = 0.0
         if was_streaming:
@@ -3000,6 +3064,9 @@ class App(tk.Tk):
         self.thumb_targets = {}
         inner, sym = sf.inner, self.sym()
         self.cards_by_url = {}
+        self._sb_frame = None
+        if self._sb_mode:
+            self.build_sb(inner)                         # big, centred, at the very top: the app is still working
         season = E.sale_season()
         if season:
             self.label(inner, season, "muted", font=self.f_small, wraplength=900, justify="left").pack(
