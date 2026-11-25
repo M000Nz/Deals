@@ -37,7 +37,7 @@ from urllib.parse import parse_qs, quote, quote_plus, unquote, urlencode, urljoi
 import requests
 from bs4 import BeautifulSoup
 
-ENGINE_VERSION = 72
+ENGINE_VERSION = 73
 GITHUB_REPO = "M000Nz/Deals"
 GITHUB_API = "https://api.github.com"
 FROZEN = bool(getattr(sys, "frozen", False))                  # True when running as the packaged Deals.exe
@@ -2657,9 +2657,17 @@ def _note_search(queries: list[tuple], out: dict) -> None:
             for r in sorted(rep, key=lambda r: -r.get("raw", 0))[:25]:
                 for t in r.get("sample") or []:
                     lines.append(f"- {r['name']}: {t[:90]}")
-        lines += ["", "TOP RESULTS (score, price, shop, title)"]
+        lines += ["", "TOP RESULTS (score, price, shop [where it came from], title, crossed-out price)"]
         for o in ranked[:25]:
-            lines.append(f"- {o.score:>3}  ${o.price:,.2f}  {o.store}  {o.title[:90]}")
+            src = {"store": "shop's own search", "staticice": "StaticICE", "ozb": "OzBargain"}.get(o.source, o.source)
+            was = f"  was ${o.was_price:,.2f}" if o.was_price else ""
+            lines.append(f"- {o.score:>3}  ${o.price:,.2f}  {o.store} [{src}]  {o.title[:80]}{was}")
+        try:
+            chk = (DATA_DIR / "price_check.log").read_text(encoding="utf-8").strip()
+            if chk:
+                lines += ["", "PRICE RE-CHECK AGAINST SHOP PAGES (JB Hi-Fi, Bing Lee, Betta)", chk[:1500]]
+        except OSError:
+            pass
         LAST_SEARCH["text"] = "\n".join(lines)
     except Exception:  # noqa: BLE001
         pass
