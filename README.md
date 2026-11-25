@@ -47,7 +47,7 @@ Your watchlist, price history and settings live in `%APPDATA%\Deals`, so updatin
 | | |
 |---|---|
 | **Search everything at once** | One search asks 180+ Australian sources: major retailers, specialist shops, [StaticICE](https://www.staticice.com.au) (200+ more shops) and OzBargain. The first results appear in seconds and improve while slower shops finish. |
-| **Real discounts first** | A result only counts as a deal if there's evidence: a marked-down price, a price that fell since your last check, or a vetted OzBargain post. Everything else sits under *Regular prices*. |
+| **Real discounts first** | A result only counts as a deal if there's evidence: a marked-down price, a price that fell since your last check, or a vetted OzBargain post (with its discount code when it lists a real one). Everything else sits under *Regular prices*. |
 | **Watchlist with alerts** | Follow a product, set a target price, and get alerted on desktop, ntfy, Discord, Telegram or email. Each item keeps a price-history graph and a **Buy now / Wait / Fair price** verdict based on its own history and the sale calendar. |
 | **Daily deals** | The biggest discounts on big-ticket items, refreshed daily. Pick a **category** (golf, cycling, camping, music, gaming...) to search that hobby directly. |
 | **For you** | Suggestions based on what you follow and like, with a few outliers mixed in so it never goes stale. |
@@ -166,7 +166,7 @@ python selftest.py            # checks the price reader against saved example pa
 
 1. Raise `ENGINE_VERSION` in `engine.py`, and the matching check in `DealScraper.pyw`.
 2. Put the version on the first line of `Version.txt`, the repository URL on the second, then one `note:` line per change.
-3. Commit and push, then run the **release** workflow (Actions → *Run workflow*) with the tag, e.g. `v59`.
+3. Commit and push, then run the **release** workflow (Actions → *Run workflow*) with the tag, e.g. `v60`.
 
 The workflow builds the app with PyInstaller, runs `--selftest` on the built exe, builds the installer with Inno Setup and publishes `Deals-Setup.exe` with its `.sha256` to the release. `build_exe.bat` is only for local test builds.
 

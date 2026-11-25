@@ -37,7 +37,7 @@ from urllib.parse import parse_qs, quote, quote_plus, unquote, urlencode, urljoi
 import requests
 from bs4 import BeautifulSoup
 
-ENGINE_VERSION = 59
+ENGINE_VERSION = 60
 GITHUB_REPO = "M000Nz/Deals"
 GITHUB_API = "https://api.github.com"
 FROZEN = bool(getattr(sys, "frozen", False))                  # True when running as the packaged Deals.exe
@@ -366,7 +366,7 @@ def select_stores(stores: list[dict], keywords: str, cfg: dict | None = None) ->
 
 DEFAULTS = {"region": "Australia", "interval": "60", "currency": "$", "popups": "1", "theme": "dark",
             "auto": "0", "hide_acc": "0", "sort": "Best match", "limited": "0", "browser": "1", "blocked": "ebay", "scope": "smart",
-            "health_auto": "1", "update_url": "https://raw.githubusercontent.com/M000Nz/Deals/main/Version.txt", "alert_mode": "instant", "quiet_on": "0", "quiet_start": "22", "quiet_end": "7", "summary_hour": "8"}
+            "health_auto": "1", "update_url": "https://raw.githubusercontent.com/M000Nz/Deals/main/Version.txt", "alert_mode": "instant", "quiet_on": "0", "quiet_start": "22", "quiet_end": "7", "summary_hour": "8", "show_codes": "1"}
 ALERT_MIN_SCORE = 50
 SECRET_KEYS = {"discord", "tg_token", "email_pass"}
 
@@ -775,6 +775,7 @@ class Offer:
     oos: bool = False                 # shown as out of stock / unavailable
     used: bool = False                # refurbished, ex-demo, open box, grey import...
     others: list = field(default_factory=list)   # the same product at other stores (set by group_offers)
+    coupon: str = ""                  # a real discount code stated in an OzBargain post (never gift-card or cashback offers)
     match: str = ""                   # pasted-link searches: "exact" (same barcode / model code), "different" or "" (unknown)
 
 
@@ -1640,6 +1641,29 @@ def _num(v: str) -> float | None:
         return None
 
 
+_CODE_OK = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-]{2,23}$")
+_CODE_NO = re.compile(r"(?i)^(none|nil|n/?a|na|no|nocode|tbc|tba|auto|automatic|online|instore|see|gift|giftcard|cashback|cash|apply|click|link)$")
+
+
+def clean_coupon(v: str | None) -> str:
+    """A discount code, or '' if the text isn't clearly one (spaces, words like 'none', or a gift-card/cashback mention)."""
+    v = (v or "").strip().strip("\"'`")
+    if not v or not _CODE_OK.match(v) or _CODE_NO.match(v):
+        return ""
+    if re.search(r"(?i)gift|prezzee|cashback|giftcard", v):
+        return ""
+    return v.upper() if v.isupper() or v.islower() else v
+
+
+def _meta_coupon(meta: dict) -> str:
+    for k, v in meta.items():
+        if "coupon" in k.lower() or k.lower() in ("code", "promo-code", "promocode"):
+            c = clean_coupon(v)
+            if c:
+                return c
+    return ""
+
+
 def parse_ozb_feed(xml_text: str, now: float | None = None) -> list[Offer]:
     """Live OzBargain deals from an RSS feed. Expired deals are dropped; expiry/votes are kept."""
     now = now or time.time()
@@ -1683,7 +1707,8 @@ def parse_ozb_feed(xml_text: str, now: float | None = None) -> list[Offer]:
         except ValueError:
             votes = 0
         out.append(Offer(store, title, price, link, was if was and was > price else None,
-                         image=meta.get("image") or image, expires=expiry, votes=votes, source="ozb"))
+                         image=meta.get("image") or image, expires=expiry, votes=votes, source="ozb",
+                         coupon=_meta_coupon(meta)))
     return out
 
 
@@ -2905,6 +2930,12 @@ def build_diagnostics(data_dir: str | os.PathLike | None = None) -> tuple[str, s
             f"{r['name']}\t{'on' if r['enabled'] else 'off'}\t{r['status']}\t{r['search_url']}" for r in stores))
         for name in ("deals_error.log", "price_check.log", "image_check.log"):
             z.writestr(name, tail(name))
+        try:                                                   # a few raw OzBargain items, to check which fields the feed offers
+            raw = fetch(OZB_BASE + "/deals/feed", timeout=(5, 8), accept="application/rss+xml,application/xml,text/xml,*/*", ua=OZB_UA)
+            items = re.findall(r"(?s)<item>.*?</item>", raw)[:4]
+            z.writestr("ozbargain_feed_sample.xml", "\n\n".join(items) or raw[:4000])
+        except Exception as ex:  # noqa: BLE001
+            z.writestr("ozbargain_feed_sample.xml", f"(could not fetch: {ex})")
     for old in sorted(data_dir.glob("diagnostics-*.zip"))[:-5]:       # keep only the newest few
         try:
             old.unlink()

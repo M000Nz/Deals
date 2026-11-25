@@ -157,7 +157,7 @@ def ensure_deps():
 ensure_deps()
 import engine as E  # noqa: E402
 
-if getattr(E, "ENGINE_VERSION", 0) < 59:
+if getattr(E, "ENGINE_VERSION", 0) < 60:
     _r = tk.Tk()
     _r.withdraw()
     messagebox.showerror("Deals", "engine.py is out of date.\n\nReplace it with the new engine.py from the "
@@ -1072,6 +1072,9 @@ class Card(tk.Canvas):
                 cand.append((1, 1.5, f"Deal score {sc}  \u00b7  {lab}", f["small_b"],
                              P["accent"] if sc >= 55 else P["fg"] if sc >= 35 else P["muted"]))
         cand.append((2, 2, self.meta, f["small"], P["fg"] if o.others else P["muted"]))
+        if o.coupon and app.show_codes:
+            cm = f"Code {o.coupon}" + (f"  \u00b7  ends {time.strftime('%d %b', time.localtime(o.expires))}" if o.expires else "")
+            cand.append((0, 0.8, wrap_lines(cm, f["small_b"], app.cw - 2 * px(12), 1)[0], f["small_b"], P["accent"]))
         if self.expiry:
             cand.append((1, 4, self.expiry, f["small_b"], P["fg"]))
         if app.rev_mode != "Off":
@@ -1306,6 +1309,7 @@ class App(tk.Tk):
         self.rev_info, self.rev_busy, self.cards_by_url, self.pick_pool = {}, False, {}, []
         self._rev_pend = set()
         self.colour_pics = s.get("colour", "0") == "1"
+        self.show_codes = s.get("show_codes", "1") == "1"
         self.view, self.cols, self._relayout = "home", 3, None
         self.sort = s.get("sort") if s.get("sort") in SORTS else SORTS[0]
         try:
@@ -1556,7 +1560,7 @@ class App(tk.Tk):
                           ("close button: quit / keep in tray", self.toggle_tray_close), None,
                           ("export data (CSV)...", self.export_data), ("back up database...", self.backup_data),
                           ("restore database...", self.restore_data), None,
-                          ("colour pictures on / off", self.toggle_colour), ("light / dark", self.toggle_theme),
+                          ("colour pictures on / off", self.toggle_colour), ("coupon codes on / off", self.toggle_codes), ("light / dark", self.toggle_theme),
                           ("window style: custom / classic", self.toggle_frame)]),
             ("Help", [("how it works", lambda: messagebox.showinfo("How it works", HOW)),
                       ("fair use and privacy", lambda: messagebox.showinfo("Fair use and privacy", TERMS)),
@@ -2004,6 +2008,12 @@ class App(tk.Tk):
         except Exception:  # noqa: BLE001
             pass
         self.destroy()
+
+    def toggle_codes(self):
+        self.show_codes = not self.show_codes
+        E.set_setting(E.db(), "show_codes", "1" if self.show_codes else "0")
+        self.set_status("coupon codes " + ("on" if self.show_codes else "off"))
+        self.render_results()
 
     def toggle_colour(self):
         self.colour_pics = not self.colour_pics
