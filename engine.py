@@ -37,7 +37,7 @@ from urllib.parse import parse_qs, quote, quote_plus, unquote, urlencode, urljoi
 import requests
 from bs4 import BeautifulSoup
 
-ENGINE_VERSION = 102
+ENGINE_VERSION = 103
 GITHUB_REPO = "M000Nz/Deals"
 GITHUB_API = "https://api.github.com"
 FROZEN = bool(getattr(sys, "frozen", False))                  # True when running as the packaged Deals.exe
@@ -2330,6 +2330,29 @@ def query_brands(keywords: str) -> list[str]:
     return out
 
 
+# A fragrance search should only show fragrances: 'Tom Ford perfume' also finds Tom Ford sunglasses, lipstick and bags.
+FRAG_QUERY_WORDS = {"perfume", "perfumes", "fragrance", "fragrances", "cologne", "colognes", "parfum", "edp", "edt",
+                    "aftershave", "eau", "toilette"}
+FRAG_CORE = {"perfume", "perfumes", "parfum", "parfums", "cologne", "colognes", "fragrance", "fragrances", "edp", "edt", "eau",
+             "toilette", "aftershave", "extrait", "pour"}
+FRAG_SOFT = {"spray", "elixir", "mist", "scent", "intense", "absolu", "set", "gift", "coffret"}
+NOT_FRAG = {"sunglasses", "sunglass", "eyewear", "glasses", "optical", "frame", "frames", "watch", "watches", "bag", "bags",
+            "handbag", "wallet", "belt", "shoes", "shoe", "sneakers", "boots", "jacket", "shirt", "tie", "scarf", "lipstick",
+            "lip", "lips", "mascara", "foundation", "blush", "eyeshadow", "concealer", "bronzer", "highlighter", "serum",
+            "moisturiser", "moisturizer", "cream", "lotion", "candle", "candles", "diffuser", "ring", "necklace",
+            "bracelet", "earrings", "eyeliner", "palette", "primer", "powder", "nail", "polish", "shampoo", "soap"}
+_ML = re.compile(r"\b\d+(?:\.\d+)?\s?ml\b")
+
+
+def _fragrance_ok(title: str, toks: list[str]) -> bool:
+    """True when a listing really is a fragrance (used only when the search is for one)."""
+    ts = set(toks)
+    core = bool(ts & FRAG_CORE)
+    if ts & NOT_FRAG and not core:
+        return False
+    return core or bool(_ML.search(title.lower())) or bool(ts & FRAG_SOFT)
+
+
 def rank_offers(keywords: str, offers: list[Offer]) -> list[Offer]:
     """Score every offer for relevance to the keywords (0-100), flag accessories, sort best first."""
     terms, excl = parse_keywords(keywords)
@@ -2338,6 +2361,8 @@ def rank_offers(keywords: str, offers: list[Offer]) -> list[Offer]:
         return []
     qtoks = set(tokens(" ".join(kept)))
     brand_ok = _query_brand_groups(kept)               # empty = no brand named, show every brand
+    frag_only = bool(qtoks & FRAG_QUERY_WORDS) or (
+        "fragrance" in detect_categories(keywords) and not qtoks & (NOT_FRAG | {"gift"}))
     shopping_acc = any(_acc_kind(t) for t in qtoks)   # "watch band": accessories are what they want
     weights = [2 if _has_digit(t) else 1 for t in kept]
     cands, seen = [], set()
@@ -2353,6 +2378,8 @@ def rank_offers(keywords: str, offers: list[Offer]) -> list[Offer]:
             continue
         if brand_ok and not any(_term_index(b, toks) >= 0 for b in brand_ok):
             continue                                   # a different brand - not what was searched for
+        if frag_only and not _fragrance_ok(o.title, toks):
+            continue                                   # sunglasses, makeup, bags... when the search is for a fragrance
         idxs = []
         for k, t in enumerate(kept):
             i = _term_index(t, toks)
