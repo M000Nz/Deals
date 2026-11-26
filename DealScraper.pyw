@@ -157,7 +157,7 @@ def ensure_deps():
 ensure_deps()
 import engine as E  # noqa: E402
 
-if getattr(E, "ENGINE_VERSION", 0) < 100:
+if getattr(E, "ENGINE_VERSION", 0) < 101:
     _r = tk.Tk()
     _r.withdraw()
     messagebox.showerror("Deals", "engine.py is out of date.\n\nReplace it with the new engine.py from the "
@@ -4021,8 +4021,8 @@ class App(tk.Tk):
             return
         row.columnconfigure(0, minsize=290)         # text on the left, then the figures + graph, buttons on the far right
         row.columnconfigure(1, minsize=px(8))       # fixed widths: the figures start at the same place in every row
-        row.columnconfigure(2, minsize=px(560))
-        row.columnconfigure(3, weight=1)
+        row.columnconfigure(2, minsize=px(540))
+        row.columnconfigure(3, weight=1, minsize=px(170))     # last check + what triggers an alert, right of the graph
         row.columnconfigure(4, minsize=130)
         left = self.frame(row)
         left.grid(row=0, column=0, sticky="nw", padx=(0, 22))
@@ -4043,7 +4043,6 @@ class App(tk.Tk):
         bl = self.label(left, best, font=self.f_big if r["best_price"] is not None else self.f_small,
                         cursor="hand2")
         bl.pack(anchor="w", pady=(2, 0))
-        self.label(left, trig, "muted", font=self.f_small).pack(anchor="w")
         flags = (["paused"] if r["paused"] else []) + (["alerts when back in stock"] if r["want_stock"] else []) + (
             [f"ignoring {r['ignore_stores']}"] if r["ignore_stores"] else [])
         if flags:
@@ -4082,6 +4081,13 @@ class App(tk.Tk):
             self.label(txt, "Usual price: learning - needs a few more checks", "muted", font=self.f_small,
                        justify="left", wraplength=px(230)).pack(anchor="w")
         self.advice_lines(txt, E.buy_advice(r["best_price"], reg[0] if reg else None, hist, sym=sym), px(230))
+        info = self.frame(row)
+        info.grid(row=0, column=3, sticky="nw", padx=(16, 8))
+        self.label(info, "Last checked", "muted", font=self.f_small).pack(anchor="w")
+        when = fmt_time(r["checked_at"]) if r["checked_at"] else "Not checked yet"
+        self.label(info, when, font=self.f_small, wraplength=px(160), justify="left").pack(anchor="w")
+        self.label(info, "Alerts me on", "muted", font=self.f_small).pack(anchor="w", pady=(10, 0))
+        self.label(info, trig, font=self.f_small, wraplength=px(160), justify="left").pack(anchor="w")
         right = self.frame(row)
         right.grid(row=0, column=4, sticky="ne")
         if r["best_url"]:
