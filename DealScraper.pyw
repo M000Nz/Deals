@@ -157,7 +157,7 @@ def ensure_deps():
 ensure_deps()
 import engine as E  # noqa: E402
 
-if getattr(E, "ENGINE_VERSION", 0) < 101:
+if getattr(E, "ENGINE_VERSION", 0) < 102:
     _r = tk.Tk()
     _r.withdraw()
     messagebox.showerror("Deals", "engine.py is out of date.\n\nReplace it with the new engine.py from the "
@@ -4838,10 +4838,13 @@ class App(tk.Tk):
             return w
         lab("A new version of Deals is ready", self.f_page)
         lab(f"Version {m['version']}   (you have {E.ENGINE_VERSION})", self.f_big, P["accent"]).pack_configure(pady=(6, 14))
+        notes = []
         if m.get("notes"):
             lab("What's new", self.f_small_b, P["muted"])
             for n in m["notes"][:8]:
-                lab("\u2022  " + n, self.f_norm, wraplength=px(520)).pack_configure(pady=(2, 0))
+                w = lab("\u2022  " + n, self.f_norm, wraplength=px(520))
+                w.pack_configure(pady=(2, 0))
+                notes.append(w)
         self._update_msg = lab("", self.f_small, P["muted"], wraplength=px(520))
         self._update_msg.pack_configure(pady=(16, 0))
         bar = tk.Frame(box, bg=P["bg"])
@@ -4860,10 +4863,38 @@ class App(tk.Tk):
             self.button(bar, "View on GitHub", lambda: self.open_url(m["page"]), pad=(14, 9), style="ghost",
                         font=self.f_small).pack(side="left", padx=(10, 0))
 
+        # Fit the page to the window: text wraps to the window's width, and when the window is short the longer
+        # "what's new" lines are left out (the buttons always stay on screen) and come back as the window grows.
+        wrapped = notes + [self._update_msg]
+
+        def fit(_e=None):
+            try:
+                ow, oh = ov.winfo_width(), ov.winfo_height()
+                if ow < 50 or oh < 50:
+                    return
+                wl = max(px(200), min(px(520), ow - px(80) - 2 * px(24)))
+                for w in wrapped:
+                    if int(float(str(w.cget("wraplength")))) != wl:
+                        w.configure(wraplength=wl)
+                for w in notes:
+                    if not w.winfo_manager():
+                        w.pack(anchor="w", pady=(2, 0), before=self._update_msg)
+                box.update_idletasks()
+                shown = list(notes)
+                while shown and box.winfo_reqheight() > oh - px(24):
+                    shown.pop().pack_forget()
+                    box.update_idletasks()
+            except tk.TclError:
+                pass
+        ov.bind("<Configure>", fit)
+        self._update_fit = fit
+        self.after(30, fit)
+
     def _upd(self, **kw):
         """Change the update page's message; quietly do nothing if that page has already gone."""
         try:
             self._update_msg.configure(**kw)
+            self.after(10, self._update_fit)             # a longer message may need room
         except (tk.TclError, AttributeError):
             pass
 

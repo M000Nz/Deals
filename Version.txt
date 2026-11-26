@@ -1,5 +1,5 @@
-101
-note: Watchlist rows now show when each item was last checked and what it alerts on (target price or percentage drop) to the right of the graph; Daily deals: 23 more searches now go only to the shops that suit them (power bank, roof rack, dash cam, tripod and others)
+102
+note: The update page now fits the window: text wraps to the window width and, in a short window, longer notes are left out so the buttons always stay on screen; Daily deals searches now use the shops that suit each item
 https://github.com/M000Nz/Deals
 note: Lower CPU and a smoother window while searching: at most 2 shop pages are read at once (so the window gets its turn), pictures/styles/frames are skipped when reading pages, the browser skips more background traffic, the results list redraws less often while it fills, and several small background checks were trimmed
 note: Smoother over time: product pictures from earlier searches are now released instead of piling up in memory, the rounded-picture mask is built once, old cached shop results are cleared out, and idle background wake-ups are fewer
