@@ -340,6 +340,12 @@ CATEGORY_WORDS = {
     "office": "pen notebook stationery whiteboard shredder laminator paper ink toner",
     "music": "guitar piano keyboard drum amp amplifier synthesizer dj turntable ukulele violin",
 }
+# More words that point at a category (mostly two-word products such as 'power bank' or 'roof rack'), so those searches go
+# to the shops that suit them instead of every shop.
+for _c, _w in {"tech": "bank tripod gimbal", "home": "dehumidifier", "diy": "welder compressor spirit",
+               "garden": "outdoor pit firepit", "sports": "fitness tracker massage bench cycling", "outdoor": "paddle paddleboard",
+               "toys": "trampoline telescope train craft", "auto": "dashcam dash jump roof tow", "luxury": "kors heuer"}.items():
+    CATEGORY_WORDS[_c] += " " + _w
 WORD_CATS: dict[str, set[str]] = {}
 for _c, _w in CATEGORY_WORDS.items():
     for _x in _w.split():
