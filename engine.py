@@ -37,7 +37,7 @@ from urllib.parse import parse_qs, quote, quote_plus, unquote, urlencode, urljoi
 import requests
 from bs4 import BeautifulSoup
 
-ENGINE_VERSION = 109
+ENGINE_VERSION = 110
 GITHUB_REPO = "M000Nz/Deals"
 GITHUB_API = "https://api.github.com"
 FROZEN = bool(getattr(sys, "frozen", False))                  # True when running as the packaged Deals.exe
@@ -4296,252 +4296,6 @@ OZB_CATS = [("All deals", "deals"), ("Electrical & Electronics", "cat/electrical
             ("Sports & Outdoors", "cat/sports-outdoors"), ("Travel", "cat/travel")]
 OZB_CAT_NAMES = [n for n, _ in OZB_CATS]
 OZB_PATH = dict(OZB_CATS)
-OZB_PATH["Freebies"] = "free"      # the dev-only Freebies tab keeps its deals under its own name
-FREE_FEEDS = ["/freebies/feed", "/tag/freebie/feed", "/deals/feed"]    # tried in this order; the last is the fallback
-
-# A freebie has to be free with nothing attached. Anything that depends on spending, a gift card, a membership tier, a
-# trial or a postage charge is left out - when in doubt the deal is NOT shown.
-_FREE_YES = re.compile(r"(?i)\bfree\b|\$\s?0(?:\.00)?(?![\d.])|\bfreebie\b|\bno cost\b")
-_FREE_NO_TITLE = re.compile(r"(?i)free\s+(?:shipping|delivery|postage|returns?|standard|express|click|p&p|gift\b|with|when|if|after|upon|on\b|over|for\s+(?:members|first|new)\b)"
-                            r"|\b(?:gift\s?cards?|e-?gift|vouchers?|spend|spending|purchase|purchases|buy|bought|minimum|min\.?\s?\$|"
-                            r"members?|membership|tiers?|gold|silver|platinum|bronze|points|loyalty|rewards?|trials?|subscri\w+|"
-                            r"cashback|rebate|bonus|bundle|bogo|2\s?for\s?1|kids?\s+eat|postage|p&h|p&p|shipping|delivery|"
-                            r"paid|upgrade|credit\s+card|first\s+(?:month|year)|per\s+month|/\s?month|/\s?mo|renew\w*|recurring|billing|billed|"
-                            r"auto-?renew\w*|cancel\w*|"
-                            r"free\s+for\s+\d+\s*(?:day|week|month|year)s?|\d+\s*-?\s*(?:day|week|month|year)s?|free\s+(?:month|year|week))\b|\+\s?\$\d")
-_FREE_NO_DESC = re.compile(r"(?i)gift\s?cards?|gift voucher|\btiers?\b|members? only|members-only|membership (?:is )?required|loyalty (?:member|program)|"
-                           r"minimum spend|min\.? spend|must spend|spend \$\d|when you (?:buy|spend)|with (?:any )?purchase|"
-                           r"(?<!no )purchase required|credit card (?:is )?required|subscription (?:is )?required|"
-                           r"(?:pay|paying|\$\d+(?:\.\d+)?)\s*(?:for\s*)?(?:postage|shipping|delivery|p&h|p&p)|shipping (?:fee|cost|charge)s?|"
-                           r"postage (?:fee|cost)s?|delivery (?:fee|cost)s?|"
-                           r"(?<!no )(?<!not )(?<!non-)subscri\w+|auto-?renew\w*|renews?\b|recurring|billed|billing|cancel(?:l?ed|\s+(?:any\s?time|before|within|your))|"
-                           r"card details|payment (?:method|details|info\w*)|(?:then|after)\s+(?:the\s+)?(?:trial|free\s+(?:period|month|year))|"
-                           r"free\s+for\s+(?:the\s+)?(?:first\s+)?\d+\s*(?:day|week|month|year)s?")
-
-
-_FREE_PCT = re.compile(r"(?i)\b100\s?%\s?(?:off|discount)\b")
-
-
-def is_really_free(title: str, desc: str = "", pct_ok: bool = False) -> bool:
-    t = _html.unescape(title or "")
-    if not (_FREE_YES.search(t) or (pct_ok and _FREE_PCT.search(t))) or _FREE_NO_TITLE.search(t):
-        return False
-    return not _FREE_NO_DESC.search(re.sub(r"<[^>]+>", " ", _html.unescape(desc or ""))[:1500])
-
-
-EPIC_FREE_URL = "https://store-site-backend-static.ak.epicgames.com/freeGamesPromotions?locale=en-AU&country=AU&allowCountries=AU"
-GAMERPOWER_URL = "https://www.gamerpower.com/api/giveaways?type=game.loot&sort-by=date"
-_GP_NO = re.compile(r"(?i)\b(?:sweepstakes?|raffle|lottery|contest|draw|winners?|win\s+a|enter\s+(?:to|the|our)|newsletter|"
-                    r"subscri\w+|renew\w*|recurring|billing|cancel\w*|sign\s?up\s+for|survey|referral|refer\s+a|follow\s+us|purchase|gift\s?card|membership|"
-                    r"trial|donat\w+|pre-?order)\b")
-
-
-def parse_epic_free(text: str, now: float | None = None) -> list[Offer]:
-    """Games Epic is giving away right now (free to keep), from Epic's own free-games list."""
-    now = now or time.time()
-    try:
-        els = json.loads(text)["data"]["Catalog"]["searchStore"]["elements"]
-    except (ValueError, KeyError, TypeError):
-        return []
-    out: list[Offer] = []
-    for e in els or []:
-        title = e.get("title") or ""
-        if not title or title.lower().startswith("mystery"):
-            continue
-        live = None
-        for grp in ((e.get("promotions") or {}).get("promotionalOffers") or []):
-            for po in grp.get("promotionalOffers") or []:
-                st, en = _parse_expiry(po.get("startDate")), _parse_expiry(po.get("endDate"))
-                free = (po.get("discountSetting") or {}).get("discountPercentage") == 0
-                if free and (not st or st <= now) and (not en or en > now):
-                    live = en or 0
-        tp = (e.get("price") or {}).get("totalPrice") or {}
-        if live is None or not (tp.get("originalPrice") or 0) > 0 or tp.get("discountPrice") != 0:
-            continue
-        slug = next((m.get("pageSlug") for m in (e.get("offerMappings") or []) if m.get("pageSlug")), None) \
-            or e.get("productSlug") or e.get("urlSlug")
-        if not slug:
-            continue
-        imgs = {k.get("type"): k.get("url") for k in (e.get("keyImages") or []) if k.get("url")}
-        img = imgs.get("OfferImageWide") or imgs.get("Thumbnail") or imgs.get("OfferImageTall") or next(iter(imgs.values()), None)
-        out.append(Offer("Epic Games Store", f"{title} - free to keep until the offer ends", 0.0,
-                         f"https://store.epicgames.com/en-US/p/{slug}", None, image=img, expires=live or None,
-                         votes=_FREE_RANK["Epic Games Store"], source="free"))
-    return out
-
-
-def parse_gamerpower(text: str, now: float | None = None) -> list[Offer]:
-    """Live game / in-game-loot giveaways (Steam, GOG, Ubisoft, itch and more) from GamerPower (credit: gamerpower.com)."""
-    now = now or time.time()
-    try:
-        data = json.loads(text)
-    except ValueError:
-        return []
-    if isinstance(data, dict):
-        data = data.get("giveaways") or []
-    out: list[Offer] = []
-    for g in data if isinstance(data, list) else []:
-        if not isinstance(g, dict):
-            continue
-        title, url = (g.get("title") or "").strip(), g.get("gamerpower_url") or g.get("open_giveaway_url") or ""
-        if not title or not url or str(g.get("status", "Active")).lower() != "active" or g.get("type") not in ("Game", "Loot", "game", "loot"):
-            continue
-        end = None
-        ed = str(g.get("end_date") or "")
-        if ed and ed.upper() != "N/A":
-            try:
-                end = datetime.strptime(ed[:19], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc).timestamp() if len(ed) > 10 \
-                    else datetime.strptime(ed, "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp() + 86399
-            except ValueError:
-                end = None
-        if end and end < now:
-            continue
-        if _GP_NO.search(title + " " + str(g.get("instructions") or "")) or _FREE_NO_DESC.search(str(g.get("description") or "")):
-            continue
-        plat = ", ".join([x.strip() for x in str(g.get("platforms") or "").split(",") if x.strip()][:2]) or "PC"
-        worth = str(g.get("worth") or "")
-        try:
-            wv = float(worth.replace("$", "").replace(",", "")) if worth.startswith("$") else 0.0
-        except ValueError:
-            wv = 0.0
-        if wv < (10.0 if str(g.get("type")).lower() == "loot" else 3.0):
-            continue                                   # skins and tiny extras (or no stated value) are mostly noise
-        try:
-            users = int(str(g.get("users") or g.get("users_claimed") or 0).replace(",", ""))
-        except ValueError:
-            users = 0
-        out.append(Offer("GamerPower: " + plat[:26], title + (f"  (usually {worth})" if worth.startswith("$") else ""), 0.0, url, None,
-                         image=g.get("image") or g.get("thumbnail"), expires=end, votes=min(5000, users // 20 + int(wv)),
-                         source="free"))
-    return out
-
-
-STEAM_FREE_URL = "https://store.steampowered.com/api/featuredcategories?cc=au&l=english"
-GOG_FREE_URL = ("https://catalog.gog.com/v1/catalog?limit=48&order=desc%3Atrending&productType=in%3Agame%2Cpack%2Cdlc"
-                "&price=between%3A0%2C0&discounted=eq%3Atrue&countryCode=AU&locale=en-US&currencyCode=AUD")
-REDDIT_FREE = [("FreeGameFindings", 10), ("googleplaydeals", 10), ("AppHookup", 15)]
-REDDIT_UA = "Deals/1.0 (desktop deal finder; reads public subreddit lists)"
-_FREE_RANK = {"Epic Games Store": 12000, "Steam": 11000, "GOG": 10000}      # official store giveaways sort first
-
-
-def parse_steam_free(text: str, now: float | None = None) -> list[Offer]:
-    """Steam games that are 100% off right now (store 'specials'), in Australian dollars."""
-    now = now or time.time()
-    try:
-        data = json.loads(text)
-    except ValueError:
-        return []
-    out, seen = [], set()
-    for cat in data.values() if isinstance(data, dict) else []:
-        for it in (cat.get("items") or []) if isinstance(cat, dict) else []:
-            if not isinstance(it, dict) or it.get("id") in seen:
-                continue
-            exp = it.get("discount_expiration")
-            if (it.get("discount_percent") != 100 and it.get("final_price") != 0) or not (it.get("original_price") or 0) > 0:
-                continue
-            if exp and exp < now:
-                continue
-            seen.add(it.get("id"))
-            out.append(Offer("Steam", f"{it.get('name', 'Game')} - free to keep for a limited time", 0.0,
-                             f"https://store.steampowered.com/app/{it['id']}", None,
-                             image=it.get("large_capsule_image") or it.get("header_image"), expires=exp or None,
-                             votes=_FREE_RANK["Steam"], source="free"))
-    return out
-
-
-def parse_gog_free(text: str) -> list[Offer]:
-    """GOG games and add-ons that are free right now (the catalogue filtered to a $0 sale price)."""
-    try:
-        items = json.loads(text).get("products") or []
-    except (ValueError, AttributeError):
-        return []
-    out = []
-    for it in items:
-        try:
-            now_p = float((it.get("price") or {}).get("finalMoney", {}).get("amount", "1"))
-            was_p = float((it.get("price") or {}).get("baseMoney", {}).get("amount", "0"))
-        except (TypeError, ValueError):
-            continue
-        link = it.get("storeLink") or (f"https://www.gog.com/en/game/{it.get('slug')}" if it.get("slug") else "")
-        if now_p != 0 or was_p <= 0 or not link or not it.get("title"):
-            continue
-        out.append(Offer("GOG", f"{it['title']} - free on GOG for a limited time", 0.0, link, None,
-                         image=it.get("coverHorizontal") or it.get("coverVertical"), votes=_FREE_RANK["GOG"], source="free"))
-    return out
-
-
-def parse_reddit_free(text: str, sub: str, min_score: int, now: float | None = None) -> list[Offer]:
-    """Free games / apps posted to a deals subreddit: recent, well upvoted, not marked expired."""
-    now = now or time.time()
-    try:
-        kids = json.loads(text)["data"]["children"]
-    except (ValueError, KeyError, TypeError):
-        return []
-    out = []
-    for k in kids:
-        d = k.get("data") or {}
-        title = _html.unescape(d.get("title") or "").strip()
-        flair = (d.get("link_flair_text") or "").lower()
-        score = int(d.get("score") or 0)
-        if (not title or d.get("over_18") or d.get("stickied") or score < min_score or now - float(d.get("created_utc") or 0) > 10 * 86400
-                or re.search(r"expired|ended|over|sold out|unavailable", flair) or not is_really_free(title, "", pct_ok=True)):
-            continue
-        img = d.get("thumbnail") if str(d.get("thumbnail", "")).startswith("http") else None
-        out.append(Offer(f"Reddit r/{sub}", re.sub(r"\s+", " ", title), 0.0, "https://www.reddit.com" + (d.get("permalink") or ""),
-                         None, image=img, votes=score, source="free"))
-    return out
-
-
-_OZ_DIGITAL = re.compile(
-    r"(?i)\[[^\]]*\b(?:pc|mac|macos|linux|windows|steam|epic|gog|android|ios|ipad|iphone|switch|ps[45]|xbox|multi|chrome)\b[^\]]*\]|"
-    r"@\s*(?:steam|epic|gog|google play|app store|apple|microsoft store|humble|itch|ubisoft|ea\b|origin|amazon (?:prime )?gaming|"
-    r"prime gaming|gamesplanet|indiegala|fanatical|stove|battle\.net|xbox|playstation|nintendo)|"
-    r"\b(?:keys?|dlc|apps?|games?|software|licen[cs]es?|e-?books?|audiobooks?|courses?|themes?|fonts?|plugins?|extensions?|steam|epic|gog)\b")
-_OZ_LOCAL = re.compile(r"(?i)^\s*\[(?:nsw|vic|qld|wa|sa|tas|act|nt|syd|mel|bne|per|adl|can)\b[^\]]*\]")
-FREE_MIN_VOTES = 3          # an OzBargain freebie needs at least this many net votes to be shown
-
-
-def parse_ozb_free(xml_text: str, now: float | None = None, digital_only: bool = True, min_votes: int = FREE_MIN_VOTES) -> list[Offer]:
-    """Live OzBargain deals that are free outright (price 0). Expired ones are dropped."""
-    now = now or time.time()
-    try:
-        root = ET.fromstring(xml_text)
-    except ET.ParseError:
-        return []
-    out: list[Offer] = []
-    for item in root.iter("item"):
-        title = link = desc = ""
-        meta: dict = {}
-        expired, image = False, None
-        for ch in item:
-            ln = _local(ch.tag)
-            if ln == "title":
-                title = _html.unescape((ch.text or "").strip())
-            elif ln == "link":
-                link = (ch.text or "").strip()
-            elif ln == "description":
-                desc = ch.text or ""
-            elif ln == "meta":
-                meta = dict(ch.attrib)
-            elif ln == "title-msg" and ch.attrib.get("type") == "expired":
-                expired = True
-            elif ln in ("content", "thumbnail", "enclosure") and ch.attrib.get("url") and not image:
-                image = ch.attrib["url"]
-        expiry = _parse_expiry(meta.get("expiry"))
-        if not title or not link or expired or (expiry and expiry < now) or not is_really_free(title, desc):
-            continue
-        if digital_only and (_OZ_LOCAL.search(title) or not _OZ_DIGITAL.search(title)):
-            continue                                   # a local giveaway or a physical item - this tab is for games and apps
-        merchant = re.search(r"@\s*([^@]+?)\s*$", title)
-        try:
-            votes = int(meta.get("votes-pos", 0)) - int(meta.get("votes-neg", 0))
-        except ValueError:
-            votes = 0
-        if votes < min_votes:
-            continue
-        out.append(Offer("OzBargain: " + (merchant.group(1)[:28] if merchant else "freebie"), title, 0.0, link, None,
-                         image=meta.get("image") or image, expires=expiry, votes=votes, source="free"))
-    return out
 OZB_PAGES = 5               # pages read by default
 OZB_MAX_PAGES = 25          # the most "load more" will go to
 OZB_STEP = 5                # pages added by each "load more"
@@ -4560,103 +4314,10 @@ def ozb_meta(con, name: str) -> dict:
         return {}
 
 
-def _free_key(title: str) -> str:
-    """A rough 'which game is this' key, so the same giveaway from two sources is only listed once."""
-    t = re.sub(r"\[[^\]]*\]|\([^)]*\)", " ", title.lower())
-    t = re.sub(r"@.*$|[-:].*$", " ", t) if len(re.sub(r"[^a-z0-9]", "", re.sub(r"@.*$|[-:].*$", " ", t))) >= 4 else t
-    t = re.sub(r"\b(?:free|key|keys|giveaway|steam|epic|gog|game|games|to|keep|for|until|the|offer|ends|on|100|off|dlc|pc)\b", " ", t)
-    return re.sub(r"[^a-z0-9]", "", t)
-
-
-def refresh_freebies(pages: int = OZB_PAGES, progress=None, cancel=None) -> dict:
-    """The developer-mode Freebies tab: games and apps that are free outright, from the official stores' own free lists,
-    GamerPower, Reddit's free-game / free-app boards and OzBargain (games, mobile and computing deals plus its freebies feed)."""
-    pages = max(1, min(int(pages), OZB_MAX_PAGES))
-    ozb_hdr = dict(accept="application/rss+xml,application/xml,text/xml,*/*", ua=OZB_UA)
-    errors: list[str] = []
-    srcs: dict[str, int] = {}
-    lists: list[list[Offer]] = []
-    src = ""
-    for cand in FREE_FEEDS[:2]:                       # OzBargain's freebies feed: the first address that answers
-        try:
-            fetch_cached(OZB_BASE + cand, 300, **ozb_hdr)
-            src = cand
-            break
-        except FetchError:
-            continue
-    bases = ([OZB_BASE + src] if src else []) + [f"{OZB_BASE}/cat/{c}/feed" for c in ("gaming", "mobile", "computing")]
-    jobs = [(b, i) for b in bases for i in range(pages)]
-    singles = [("Epic", EPIC_FREE_URL, parse_epic_free, {}), ("Steam", STEAM_FREE_URL, parse_steam_free, {}),
-               ("GOG", GOG_FREE_URL, parse_gog_free, {}), ("GamerPower", GAMERPOWER_URL, parse_gamerpower, {})]
-    reddit = [(f"Reddit r/{sub}", f"https://www.reddit.com/r/{sub}/new.json?limit=60&raw_json=1",
-               lambda t, sub=sub, ms=ms: parse_reddit_free(t, sub, ms), {"ua": REDDIT_UA}) for sub, ms in REDDIT_FREE]
-    total = len(jobs) + len(singles) + len(reddit)
-    done = 0
-    results: dict = {}
-    with ThreadPoolExecutor(max_workers=6) as ex:
-        futs = {}
-        for b, i in jobs:
-            futs[ex.submit(fetch_cached, b + (f"?page={i}" if i else ""), 300, **ozb_hdr)] = ("ozb", b, i)
-        for label, url, fn, kw in singles + reddit:
-            futs[ex.submit(fetch_cached, url, 600, accept="application/json", ua=kw.get("ua", UA))] = ("one", label, fn)
-        for f in as_completed(futs):
-            kind, a, b = futs[f]
-            try:
-                results[(kind, a, b if kind == "ozb" else 0)] = (f.result(), b)
-            except FetchError as e:
-                if kind == "one":
-                    errors.append(f"{a}: {e}")
-            done += 1
-            if progress:
-                progress(done, total)
-            if cancel is not None and cancel.is_set():
-                return {"kept": 0, "pages": 0, "full": False}
-    fixed: list[Offer] = []
-    for (kind, a, _), (text, b) in sorted(results.items(), key=lambda kv: str(kv[0])):
-        if kind == "one":
-            try:
-                got_ = b(text)
-            except Exception:  # noqa: BLE001
-                errors.append(f"{a}: unreadable answer")
-                continue
-            srcs[a] = len(got_)
-            fixed += got_
-    ozb_items: list[Offer] = []
-    for (kind, a, i), (text, _b) in sorted(results.items(), key=lambda kv: (kv[0][0], kv[0][1], kv[0][2])):
-        if kind == "ozb":
-            ozb_items += parse_ozb_free(text)
-    srcs["OzBargain"] = len({o.url for o in ozb_items})
-    order = {"Epic Games Store": 0, "Steam": 1, "GOG": 2}
-    pool = sorted(fixed, key=lambda o: (order.get(o.store, 3), -(o.votes or 0))) + sorted(ozb_items, key=lambda o: -(o.votes or 0))
-    out, seen_u, seen_k = [], set(), set()
-    for o in pool:
-        k = _free_key(o.title)
-        if o.url in seen_u or (k and k in seen_k):
-            continue
-        seen_u.add(o.url)
-        seen_k.add(k)
-        out.append(o)
-    if not out and errors and len(errors) >= len(singles) + len(reddit):
-        raise FetchError("error", "no free-deal source answered")
-    con = db()
-    kind_ = "ozb:free"
-    con.execute("DELETE FROM picks WHERE kind=?", (kind_,))
-    now = time.time()
-    for n, o in enumerate(out):
-        _store_pick(con, kind_, o, 100.0, "free", ts=now - n * 0.001)
-    meta = {"pages": pages, "full": pages < OZB_MAX_PAGES, "kept": len(out), "src": src, "srcs": srcs, "errors": errors}
-    set_setting(con, "ozb_meta_free", json.dumps(meta))
-    con.commit()
-    return meta
-
-
 def refresh_ozb(name: str, pages: int = OZB_PAGES, progress=None, cancel=None) -> dict:
     """Read the first `pages` pages of one OzBargain category (newest first) and save the deals that state a price."""
     path = OZB_PATH.get(name, "deals")
     pages = max(1, min(int(pages), OZB_MAX_PAGES))
-    if path == "free":
-        return refresh_freebies(pages, progress, cancel)
-    freebies = False
     base = f"{OZB_BASE}/{path}/feed"
     src = ""
     texts: dict[int, str] = {}
@@ -4687,7 +4348,7 @@ def refresh_ozb(name: str, pages: int = OZB_PAGES, progress=None, cancel=None) -
     for i in sorted(texts):
         if i == got:
             last_items = texts[i].count("<item")
-        for o in (parse_ozb_free if freebies else parse_ozb_feed)(texts[i]):
+        for o in parse_ozb_feed(texts[i]):
             if o.url not in seen:
                 seen.add(o.url)
                 out.append(o)
@@ -4696,7 +4357,7 @@ def refresh_ozb(name: str, pages: int = OZB_PAGES, progress=None, cancel=None) -
     con.execute("DELETE FROM picks WHERE kind=?", (kind,))
     now = time.time()
     for n, o in enumerate(out):
-        pct = 100.0 if freebies else round(100 * (o.was_price - o.price) / o.was_price, 1) if o.was_price else 0.0
+        pct = round(100 * (o.was_price - o.price) / o.was_price, 1) if o.was_price else 0.0
         _store_pick(con, kind, o, pct, path, ts=now - n * 0.001)       # keeps OzBargain's own newest-first order
     meta = {"pages": got + 1, "full": last_items >= 20 and got + 1 >= pages, "kept": len(out), "items_last": last_items, "src": src, "srcs": srcs, "errors": errors}
     set_setting(con, "ozb_meta_" + path, json.dumps(meta))
