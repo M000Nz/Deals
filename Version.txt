@@ -1,5 +1,5 @@
-106
-note: Developer-mode Freebies tab now also checks Epic free games and GamerPower giveaways (Steam, GOG and others) as well as OzBargain, and leaves out anything with strings attached
+107
+note: Freebies (developer mode) now also leave out anything tied to a subscription, auto-renewal, card details or a limited free period such as "free for 3 months"
 https://github.com/M000Nz/Deals
 note: Lower CPU and a smoother window while searching: at most 2 shop pages are read at once (so the window gets its turn), pictures/styles/frames are skipped when reading pages, the browser skips more background traffic, the results list redraws less often while it fills, and several small background checks were trimmed
 note: Smoother over time: product pictures from earlier searches are now released instead of piling up in memory, the rounded-picture mask is built once, old cached shop results are cleared out, and idle background wake-ups are fewer

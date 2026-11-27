@@ -37,7 +37,7 @@ from urllib.parse import parse_qs, quote, quote_plus, unquote, urlencode, urljoi
 import requests
 from bs4 import BeautifulSoup
 
-ENGINE_VERSION = 106
+ENGINE_VERSION = 107
 GITHUB_REPO = "M000Nz/Deals"
 GITHUB_API = "https://api.github.com"
 FROZEN = bool(getattr(sys, "frozen", False))                  # True when running as the packaged Deals.exe
@@ -4284,12 +4284,17 @@ _FREE_NO_TITLE = re.compile(r"(?i)free\s+(?:shipping|delivery|postage|returns?|s
                             r"|\b(?:gift\s?cards?|e-?gift|vouchers?|spend|spending|purchase|purchases|buy|bought|minimum|min\.?\s?\$|"
                             r"members?|membership|tiers?|gold|silver|platinum|bronze|points|loyalty|rewards?|trials?|subscri\w+|"
                             r"cashback|rebate|bonus|bundle|bogo|2\s?for\s?1|kids?\s+eat|postage|p&h|p&p|shipping|delivery|"
-                            r"paid|upgrade|credit\s+card|first\s+month|per\s+month|/\s?month|/\s?mo\b)\b|\+\s?\$\d")
+                            r"paid|upgrade|credit\s+card|first\s+(?:month|year)|per\s+month|/\s?month|/\s?mo|renew\w*|recurring|billing|billed|"
+                            r"auto-?renew\w*|cancel\w*|"
+                            r"free\s+for\s+\d+\s*(?:day|week|month|year)s?|\d+\s*-?\s*(?:day|week|month|year)s?|free\s+(?:month|year|week))\b|\+\s?\$\d")
 _FREE_NO_DESC = re.compile(r"(?i)gift\s?cards?|gift voucher|\btiers?\b|members? only|members-only|membership (?:is )?required|loyalty (?:member|program)|"
                            r"minimum spend|min\.? spend|must spend|spend \$\d|when you (?:buy|spend)|with (?:any )?purchase|"
                            r"(?<!no )purchase required|credit card (?:is )?required|subscription (?:is )?required|"
                            r"(?:pay|paying|\$\d+(?:\.\d+)?)\s*(?:for\s*)?(?:postage|shipping|delivery|p&h|p&p)|shipping (?:fee|cost|charge)s?|"
-                           r"postage (?:fee|cost)s?|delivery (?:fee|cost)s?")
+                           r"postage (?:fee|cost)s?|delivery (?:fee|cost)s?|"
+                           r"(?<!no )(?<!not )(?<!non-)subscri\w+|auto-?renew\w*|renews?\b|recurring|billed|billing|cancel(?:l?ed|\s+(?:any\s?time|before|within|your))|"
+                           r"card details|payment (?:method|details|info\w*)|(?:then|after)\s+(?:the\s+)?(?:trial|free\s+(?:period|month|year))|"
+                           r"free\s+for\s+(?:the\s+)?(?:first\s+)?\d+\s*(?:day|week|month|year)s?")
 
 
 def is_really_free(title: str, desc: str = "") -> bool:
@@ -4302,7 +4307,7 @@ def is_really_free(title: str, desc: str = "") -> bool:
 EPIC_FREE_URL = "https://store-site-backend-static.ak.epicgames.com/freeGamesPromotions?locale=en-AU&country=AU&allowCountries=AU"
 GAMERPOWER_URL = "https://www.gamerpower.com/api/giveaways?type=game.loot&sort-by=date"
 _GP_NO = re.compile(r"(?i)\b(?:sweepstakes?|raffle|lottery|contest|draw|winners?|win\s+a|enter\s+(?:to|the|our)|newsletter|"
-                    r"subscribe|sign\s?up\s+for|survey|referral|refer\s+a|follow\s+us|purchase|gift\s?card|membership|"
+                    r"subscri\w+|renew\w*|recurring|billing|cancel\w*|sign\s?up\s+for|survey|referral|refer\s+a|follow\s+us|purchase|gift\s?card|membership|"
                     r"trial|donat\w+|pre-?order)\b")
 
 
