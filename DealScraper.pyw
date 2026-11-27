@@ -157,7 +157,7 @@ def ensure_deps():
 ensure_deps()
 import engine as E  # noqa: E402
 
-if getattr(E, "ENGINE_VERSION", 0) < 104:
+if getattr(E, "ENGINE_VERSION", 0) < 105:
     _r = tk.Tk()
     _r.withdraw()
     messagebox.showerror("Deals", "engine.py is out of date.\n\nReplace it with the new engine.py from the "
@@ -1357,7 +1357,7 @@ class Card(tk.Canvas):
             self.create_text(x, y, anchor="nw", text=ln, font=f["title"], fill=P["fg"])
             y += self.lt
         y = pad + ih + px(8) + 2 * self.lt + px(4)
-        price = E.money(self.sym, o.price)
+        price = "FREE" if o.source == "ozb-free" else E.money(self.sym, o.price)
         self.create_text(x, y, anchor="nw", text=price, font=f["price"], fill=P["accent"] if kind else P["fg"])
         if kind == "markdown" and o.was_price:
             self.create_text(x + f["price"].measure(price) + px(8), y + (self.lp - self.ls) // 2 + px(1), anchor="nw",
@@ -1776,7 +1776,7 @@ class App(tk.Tk):
                 self.style(w, role)
             self.render_watch()
             self.render_results()
-            if self.view in ("daily", "foryou", "ozb"):
+            if self.view in ("daily", "foryou", "ozb", "free"):
                 self.render_picks(self.view)
             if self.view == "home":
                 self.refresh_home()
@@ -1867,12 +1867,16 @@ class App(tk.Tk):
             "foryou": self.button(tabs, "For you", lambda: self.show_picks("foryou"), font=self.f_bold, pad=(18, 6),
                                   style="ghost"),
             "ozb": self.button(tabs, "OzBargain", lambda: self.show_picks("ozb"), font=self.f_bold, pad=(18, 6),
-                               style="ghost")}
+                               style="ghost"),
+            "free": self.button(tabs, "Freebies", lambda: self.show_picks("free"), font=self.f_bold, pad=(18, 6),
+                                style="ghost")}
         self.tab_btn["search"].pack(side="left", padx=(0, 4))
         self.tab_btn["watch"].pack(side="left", padx=(0, 4))
         self.tab_btn["daily"].pack(side="left", padx=(0, 4))
         self.tab_btn["foryou"].pack(side="left", padx=(0, 4))
-        self.tab_btn["ozb"].pack(side="left")
+        self.tab_btn["ozb"].pack(side="left", padx=(0, 4))
+        self._tabs_holder = tabs
+        self.apply_dev_tabs()                                       # Freebies is a developer-mode tab for now
 
         if self.wants_frameless:                                    # our own minimise / maximise / close
             wb = self.frame(top)
@@ -1956,12 +1960,13 @@ class App(tk.Tk):
         self.daily = ScrollFrame(self, self.main)
         self.foryou = ScrollFrame(self, self.main)
         self.ozb = ScrollFrame(self, self.main)
+        self.free = ScrollFrame(self, self.main)
         self.ozb_cat = E.get_settings(E.db()).get("ozb_cat") or "All deals"
         if self.ozb_cat not in E.OZB_CAT_NAMES:
             self.ozb_cat = "All deals"
         self.ozb_page = 0
         self.picking, self.pick_cells, self._pick_cols, self.daily_shuffle = None, [], {}, None
-        self.pick_sorts = {"daily": "Biggest savings", "foryou": "Newest", "ozb": "Newest"}
+        self.pick_sorts = {"daily": "Biggest savings", "foryou": "Newest", "ozb": "Newest", "free": "Newest"}
         self.daily_cat = E.get_settings(E.db()).get("daily_cat") or "All"
         if self.daily_cat not in E.DAILY_CAT_NAMES:
             self.daily_cat = "All"
@@ -1975,6 +1980,7 @@ class App(tk.Tk):
         self.daily.on_width = lambda w: self.on_pick_width("daily", w)
         self.foryou.on_width = lambda w: self.on_pick_width("foryou", w)
         self.ozb.on_width = lambda w: self.on_pick_width("ozb", w)
+        self.free.on_width = lambda w: self.on_pick_width("free", w)
         self.build_home()
         self.build_loading()
 
@@ -2316,6 +2322,7 @@ class App(tk.Tk):
         self.daily.outer.pack_forget()
         self.foryou.outer.pack_forget()
         self.ozb.outer.pack_forget()
+        self.free.outer.pack_forget()
         self.loading.pack_forget()
         self.load_spin.stop()
 
@@ -2665,7 +2672,7 @@ class App(tk.Tk):
         self.set_status("listing restored")
         if self.view == "results":
             self.render_results()
-        elif self.view in ("daily", "foryou", "ozb"):
+        elif self.view in ("daily", "foryou", "ozb", "free"):
             self.render_picks(self.view)
 
     def report_price(self, o):
@@ -2687,7 +2694,7 @@ class App(tk.Tk):
         self.toast("Listing hidden", lambda: self.undo_hide(o))
         if self.view == "results":
             self.render_results()
-        elif self.view in ("daily", "foryou", "ozb"):
+        elif self.view in ("daily", "foryou", "ozb", "free"):
             self.render_picks(self.view)
 
     def star_tip(self, o):
@@ -2754,7 +2761,7 @@ class App(tk.Tk):
     def start_review_check(self):
         if self.rev_mode == "Off" or self.rev_busy:
             return
-        if self.view in ("daily", "foryou", "ozb"):
+        if self.view in ("daily", "foryou", "ozb", "free"):
             offers = [o for o in self.pick_pool if self.rev_pass(o, True)][:30]
         elif self.results:
             deals, others = self.order()
@@ -3373,8 +3380,8 @@ class App(tk.Tk):
         self.set_tabs(kind)
         self.update_badge()
         con = E.db()
-        if kind == "ozb":
-            age = E.picks_age(con, E.ozb_kind(self.ozb_cat))
+        if kind in ("ozb", "free"):
+            age = E.picks_age(con, E.ozb_kind(self._ozbname(kind)))
             stale = age is None or age > E.OZB_EVERY
         else:
             age = E.picks_age(con, kind)
@@ -3382,9 +3389,9 @@ class App(tk.Tk):
         if self.picking == kind:
             sf.outer.pack_forget()
             self.show_loading(self.load_total, self.pick_title(kind))
-        elif kind == "ozb":
+        elif kind in ("ozb", "free"):
             if stale and not self.picking and not self.searching:
-                self.refresh_ozb()
+                self.refresh_ozb(kind=kind)
             else:
                 self.render_picks(kind)
         elif stale and not self.picking and not self.searching and (kind == "daily" or E.interest_queries(con)):
@@ -3393,17 +3400,32 @@ class App(tk.Tk):
             self.render_picks(kind)
 
     def _sf(self, kind):
-        return {"daily": self.daily, "foryou": self.foryou, "ozb": self.ozb}[kind]
+        return {"daily": self.daily, "foryou": self.foryou, "ozb": self.ozb, "free": self.free}[kind]
+
+    def apply_dev_tabs(self):
+        b = self.tab_btn["free"]
+        if self.dev_mode():
+            if not b.winfo_manager():
+                b.pack(side="left")
+        else:
+            b.pack_forget()
+            if getattr(self, "view", "") == "free":
+                self.show_home()
+
+    def _ozbname(self, kind=None):
+        k = kind or (self.view if self.view in ("ozb", "free") else "ozb")
+        return "Freebies" if k == "free" else self.ozb_cat
 
     # ---- OzBargain tab ----
-    def refresh_ozb(self, pages=None):
+    def refresh_ozb(self, pages=None, kind=None):
         if self.picking or self.searching:
             self.cancel_running()
-        name = self.ozb_cat
+        kind = kind or (self.view if self.view in ("ozb", "free") else "ozb")
+        name = self._ozbname(kind)
         depth = pages or E.OZB_PAGES
-        self.picking = "ozb"
+        self.picking = kind
         self.pick_cancel = cancel = threading.Event()
-        self._sf("ozb").outer.pack_forget()
+        self._sf(kind).outer.pack_forget()
         self.show_loading(depth, f"Reading {depth} pages of OzBargain {name}...")
         self.load_sub.configure(text=f"0 of {depth} pages read")
         self.set_status("reading OzBargain...")
@@ -3411,7 +3433,7 @@ class App(tk.Tk):
         def prog(d, t):
             if not cancel.is_set():
                 self.q.put(lambda: (self.load_sub.configure(text=f"{d} of {t} pages read"), self.load_bar.set(d / max(t, 1)))
-                           if self.picking == "ozb" else None)
+                           if self.picking == kind else None)
 
         def work():
             msg = ""
@@ -3421,7 +3443,7 @@ class App(tk.Tk):
                 log_error(traceback.format_exc())
                 msg = f"Couldn't read OzBargain just now ({e}). Try Refresh in a minute."
             if not cancel.is_set():
-                self.q.put(lambda: self.picks_done("ozb", msg))
+                self.q.put(lambda: self.picks_done(kind, msg))
         threading.Thread(target=work, daemon=True).start()
 
     def set_ozb_cat(self, v):
@@ -3435,9 +3457,10 @@ class App(tk.Tk):
             self.render_picks("ozb")
 
     def ozb_goto(self, page):
+        k = self.view if self.view in ("ozb", "free") else "ozb"
         self.ozb_page = page
-        self.render_picks("ozb")
-        self.after(30, lambda: self.ozb.canvas.yview_moveto(0))
+        self.render_picks(k)
+        self.after(30, lambda: self._sf(k).canvas.yview_moveto(0))
 
     def ozb_pager(self, parent, page, pages, more=None):
         row = self.frame(parent)
@@ -3465,7 +3488,7 @@ class App(tk.Tk):
                 return self.shuffle_daily()
             v = "Newest"
         self.pick_sorts[kind] = v
-        if kind == "ozb":
+        if kind in ("ozb", "free"):
             self.ozb_page = 0
         if kind == "daily":
             self.daily_shuffle = None
@@ -3527,8 +3550,8 @@ class App(tk.Tk):
             self.render_picks("daily")
 
     def pick_title(self, kind):
-        if kind == "ozb":
-            return f"Reading OzBargain {self.ozb_cat}..."
+        if kind in ("ozb", "free"):
+            return f"Reading OzBargain {self._ozbname(kind)}..."
         if kind == "daily" and getattr(self, "daily_cat", "All") != "All":
             return f"Finding the best {self.daily_cat} deals..."
         return ("Finding today's biggest discounts..." if kind == "daily" else "Looking for deals you might like...")
@@ -3602,8 +3625,8 @@ class App(tk.Tk):
         self.prune()
         self.thumb_targets, self.cards_by_url, self._typical = {}, {}, None
         inner, sym, con = sf.inner, self.sym(), E.db()
-        if kind == "ozb":
-            return self.render_ozb(sf, inner, sym, con)
+        if kind in ("ozb", "free"):
+            return self.render_ozb(sf, inner, sym, con, kind)
         offers = E.pick_offers(con, kind, category=self.daily_cat if kind == "daily" else "All")
         self.sort_picks(offers, kind, con)
         self.pick_pool = list(offers[:80 if kind == "daily" else 60])
@@ -3658,10 +3681,11 @@ class App(tk.Tk):
         if self.rev_mode != "Off" and not self.rev_busy and any(o.url not in self.rev_info for o in self.pick_pool):
             self.after(50, self.start_review_check)
 
-    def render_ozb(self, sf, inner, sym, con):
-        name = self.ozb_cat
+    def render_ozb(self, sf, inner, sym, con, kind="ozb"):
+        free = kind == "free"
+        name = self._ozbname(kind)
         offers = E.pick_offers(con, E.ozb_kind(name), limit=2000)
-        self.sort_picks(offers, "ozb", con)
+        self.sort_picks(offers, kind, con)
         self.pick_pool = []
         meta = E.ozb_meta(con, name)
         total = len(offers)
@@ -3671,21 +3695,29 @@ class App(tk.Tk):
         depth = int(meta.get("pages") or E.OZB_PAGES)
         hdr = self.frame(inner)
         hdr.pack(fill="x", padx=26, pady=(18, 2))
-        self.label(hdr, "OzBargain", font=self.f_page).pack(side="left")
-        self.dropdown(hdr, "category: ", E.OZB_CAT_NAMES, lambda: self.ozb_cat, self.set_ozb_cat).pack(side="left", padx=(18, 0))
-        self.button(hdr, "Refresh", lambda: self.refresh_ozb(), pad=(14, 5)).pack(side="right")
-        self.dropdown(hdr, "sort: ", OZB_SORTS, lambda: self.pick_sorts.get("ozb", "Newest"),
-                      lambda v: self.set_pick_sort("ozb", v)).pack(side="right", padx=(0, 10))
+        self.label(hdr, "Freebies" if free else "OzBargain", font=self.f_page).pack(side="left")
+        if not free:
+            self.dropdown(hdr, "category: ", E.OZB_CAT_NAMES, lambda: self.ozb_cat, self.set_ozb_cat).pack(side="left", padx=(18, 0))
+        self.button(hdr, "Refresh", lambda: self.refresh_ozb(kind=kind), pad=(14, 5)).pack(side="right")
+        self.dropdown(hdr, "sort: ", OZB_SORTS, lambda: self.pick_sorts.get(kind, "Newest"),
+                      lambda v: self.set_pick_sort(kind, v)).pack(side="right", padx=(0, 10))
         age = E.picks_age(con, E.ozb_kind(name))
-        sub = (f"Live OzBargain deals from the first {depth} pages of {name}: {total} that state a price "
-               f"(deals like '20% off sitewide' have no item price, so they aren't shown). Updated {self.ago(age)}.")
+        if free:
+            sub = (f"Developer preview. Free outright from the first {depth} pages of OzBargain: {total} found. Anything that needs "
+                   f"a purchase, gift card, membership tier, trial or postage is left out. Check the deal page before you go - "
+                   f"some are local or limited. Updated {self.ago(age)}"
+                   + (f"  (source: {meta['src']})" if meta.get("src") else "") + ".")
+        else:
+            sub = (f"Live OzBargain deals from the first {depth} pages of {name}: {total} that state a price "
+                   f"(deals like '20% off sitewide' have no item price, so they aren't shown). Updated {self.ago(age)}.")
         self.label(inner, sub, "muted", font=self.f_small, wraplength=760, justify="left").pack(anchor="w", padx=26, pady=(0, 4))
         more = None
         if meta.get("full") and depth < E.OZB_MAX_PAGES:
             nxt = min(E.OZB_MAX_PAGES, depth + E.OZB_STEP)
-            more = (f"Load pages {depth + 1}-{nxt}", lambda n=nxt: self.refresh_ozb(n))
+            more = (f"Load pages {depth + 1}-{nxt}", lambda n=nxt: self.refresh_ozb(n, kind=kind))
         if not offers:
-            note = getattr(self, "pick_msg", "") or "Nothing came back. Press Refresh."
+            note = getattr(self, "pick_msg", "") or ("No free deals found right now. Press Refresh later." if free
+                                                     else "Nothing came back. Press Refresh.")
             self.label(inner, note, font=self.f_big).pack(anchor="w", padx=26, pady=(14, 0))
             self.pick_msg = ""
             return
@@ -4292,6 +4324,7 @@ class App(tk.Tk):
 
     def set_dev_mode(self, on):
         E.set_setting(E.db(), "dev_mode", "1" if on else "0")
+        self.apply_dev_tabs()
         self.set_status("developer mode " + ("on" if on else "off"))
 
     def make_diagnostics(self, parent):

@@ -37,7 +37,7 @@ from urllib.parse import parse_qs, quote, quote_plus, unquote, urlencode, urljoi
 import requests
 from bs4 import BeautifulSoup
 
-ENGINE_VERSION = 104
+ENGINE_VERSION = 105
 GITHUB_REPO = "M000Nz/Deals"
 GITHUB_API = "https://api.github.com"
 FROZEN = bool(getattr(sys, "frozen", False))                  # True when running as the packaged Deals.exe
@@ -4274,6 +4274,68 @@ OZB_CATS = [("All deals", "deals"), ("Electrical & Electronics", "cat/electrical
             ("Sports & Outdoors", "cat/sports-outdoors"), ("Travel", "cat/travel")]
 OZB_CAT_NAMES = [n for n, _ in OZB_CATS]
 OZB_PATH = dict(OZB_CATS)
+OZB_PATH["Freebies"] = "free"      # the dev-only Freebies tab keeps its deals under its own name
+FREE_FEEDS = ["/freebies/feed", "/tag/freebie/feed", "/deals/feed"]    # tried in this order; the last is the fallback
+
+# A freebie has to be free with nothing attached. Anything that depends on spending, a gift card, a membership tier, a
+# trial or a postage charge is left out - when in doubt the deal is NOT shown.
+_FREE_YES = re.compile(r"(?i)\bfree\b|\$\s?0(?:\.00)?(?![\d.])|\bfreebie\b|\bno cost\b")
+_FREE_NO_TITLE = re.compile(r"(?i)free\s+(?:shipping|delivery|postage|returns?|standard|express|click|p&p|gift\b|with|when|if|after|upon|on\b|over|for\s+(?:members|first|new)\b)"
+                            r"|\b(?:gift\s?cards?|e-?gift|vouchers?|spend|spending|purchase|purchases|buy|bought|minimum|min\.?\s?\$|"
+                            r"members?|membership|tiers?|gold|silver|platinum|bronze|points|loyalty|rewards?|trials?|subscri\w+|"
+                            r"cashback|rebate|bonus|bundle|bogo|2\s?for\s?1|kids?\s+eat|postage|p&h|p&p|shipping|delivery|"
+                            r"paid|upgrade|credit\s+card|first\s+month|per\s+month|/\s?month|/\s?mo\b)\b|\+\s?\$\d")
+_FREE_NO_DESC = re.compile(r"(?i)gift\s?cards?|gift voucher|\btiers?\b|members? only|members-only|membership (?:is )?required|loyalty (?:member|program)|"
+                           r"minimum spend|min\.? spend|must spend|spend \$\d|when you (?:buy|spend)|with (?:any )?purchase|"
+                           r"(?<!no )purchase required|credit card (?:is )?required|subscription (?:is )?required|"
+                           r"(?:pay|paying|\$\d+(?:\.\d+)?)\s*(?:for\s*)?(?:postage|shipping|delivery|p&h|p&p)|shipping (?:fee|cost|charge)s?|"
+                           r"postage (?:fee|cost)s?|delivery (?:fee|cost)s?")
+
+
+def is_really_free(title: str, desc: str = "") -> bool:
+    t = _html.unescape(title or "")
+    if not _FREE_YES.search(t) or _FREE_NO_TITLE.search(t):
+        return False
+    return not _FREE_NO_DESC.search(re.sub(r"<[^>]+>", " ", _html.unescape(desc or ""))[:1500])
+
+
+def parse_ozb_free(xml_text: str, now: float | None = None) -> list[Offer]:
+    """Live OzBargain deals that are free outright (price 0). Expired ones are dropped."""
+    now = now or time.time()
+    try:
+        root = ET.fromstring(xml_text)
+    except ET.ParseError:
+        return []
+    out: list[Offer] = []
+    for item in root.iter("item"):
+        title = link = desc = ""
+        meta: dict = {}
+        expired, image = False, None
+        for ch in item:
+            ln = _local(ch.tag)
+            if ln == "title":
+                title = _html.unescape((ch.text or "").strip())
+            elif ln == "link":
+                link = (ch.text or "").strip()
+            elif ln == "description":
+                desc = ch.text or ""
+            elif ln == "meta":
+                meta = dict(ch.attrib)
+            elif ln == "title-msg" and ch.attrib.get("type") == "expired":
+                expired = True
+            elif ln in ("content", "thumbnail", "enclosure") and ch.attrib.get("url") and not image:
+                image = ch.attrib["url"]
+        expiry = _parse_expiry(meta.get("expiry"))
+        if not title or not link or expired or (expiry and expiry < now) or not is_really_free(title, desc):
+            continue
+        merchant = re.search(r"@\s*([^@]+?)\s*$", title)
+        try:
+            votes = int(meta.get("votes-pos", 0)) - int(meta.get("votes-neg", 0))
+        except ValueError:
+            votes = 0
+        out.append(Offer("OzBargain: " + (merchant.group(1)[:28] if merchant else "freebie"), title, 0.0, link, None,
+                         image=meta.get("image") or image, expires=expiry, votes=votes, source="ozb-free"))
+    return out
 OZB_PAGES = 5               # pages read by default
 OZB_MAX_PAGES = 25          # the most "load more" will go to
 OZB_STEP = 5                # pages added by each "load more"
@@ -4296,7 +4358,17 @@ def refresh_ozb(name: str, pages: int = OZB_PAGES, progress=None, cancel=None) -
     """Read the first `pages` pages of one OzBargain category (newest first) and save the deals that state a price."""
     path = OZB_PATH.get(name, "deals")
     pages = max(1, min(int(pages), OZB_MAX_PAGES))
+    freebies = path == "free"
     base = f"{OZB_BASE}/{path}/feed"
+    src = ""
+    if freebies:                                       # use the first feed address OzBargain actually answers
+        for cand in FREE_FEEDS:
+            try:
+                fetch_cached(OZB_BASE + cand, 300, accept="application/rss+xml,application/xml,text/xml,*/*", ua=OZB_UA)
+            except FetchError:
+                continue
+            base, src = OZB_BASE + cand, cand
+            break
     texts: dict[int, str] = {}
     errs: list[Exception] = []
     done = 0
@@ -4322,7 +4394,7 @@ def refresh_ozb(name: str, pages: int = OZB_PAGES, progress=None, cancel=None) -
     for i in sorted(texts):
         if i == got:
             last_items = texts[i].count("<item")
-        for o in parse_ozb_feed(texts[i]):
+        for o in (parse_ozb_free if freebies else parse_ozb_feed)(texts[i]):
             if o.url not in seen:
                 seen.add(o.url)
                 out.append(o)
@@ -4331,9 +4403,9 @@ def refresh_ozb(name: str, pages: int = OZB_PAGES, progress=None, cancel=None) -
     con.execute("DELETE FROM picks WHERE kind=?", (kind,))
     now = time.time()
     for n, o in enumerate(out):
-        pct = round(100 * (o.was_price - o.price) / o.was_price, 1) if o.was_price else 0.0
+        pct = 100.0 if freebies else round(100 * (o.was_price - o.price) / o.was_price, 1) if o.was_price else 0.0
         _store_pick(con, kind, o, pct, path, ts=now - n * 0.001)       # keeps OzBargain's own newest-first order
-    meta = {"pages": got + 1, "full": last_items >= 20 and got + 1 >= pages, "kept": len(out), "items_last": last_items}
+    meta = {"pages": got + 1, "full": last_items >= 20 and got + 1 >= pages, "kept": len(out), "items_last": last_items, "src": src}
     set_setting(con, "ozb_meta_" + path, json.dumps(meta))
     con.commit()
     return meta
