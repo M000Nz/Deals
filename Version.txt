@@ -1,5 +1,6 @@
-108
+109
 https://github.com/M000Nz/Deals
+note: v109: Freebies tab (developer mode) reworked for games and apps: Epic, Steam, GOG, GamerPower, Reddit free-game and free-app boards and OzBargain's gaming, mobile and computing deals; local and physical items, low-vote posts and subscription offers are left out, and the best come first
 note: v108: Update page: only what's new since the version you have is shown; if you are several versions behind it lists each missed version
 note: v107: Freebies (developer mode) leave out anything tied to a subscription, auto-renewal, card details or a limited free period
 note: v106: Freebies (developer mode) now also check Epic free games and GamerPower giveaways (Steam, GOG and more), with no strings attached

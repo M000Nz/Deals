@@ -157,7 +157,7 @@ def ensure_deps():
 ensure_deps()
 import engine as E  # noqa: E402
 
-if getattr(E, "ENGINE_VERSION", 0) < 108:
+if getattr(E, "ENGINE_VERSION", 0) < 109:
     _r = tk.Tk()
     _r.withdraw()
     messagebox.showerror("Deals", "engine.py is out of date.\n\nReplace it with the new engine.py from the "
@@ -1169,7 +1169,8 @@ class Card(tk.Canvas):
         else:
             self.save = ""
         self.save = wrap_lines(self.save, f["small_b"], tw, 1)[0] if self.save else ""
-        meta = [o.store] + ([f"{o.votes:+d} votes"] if o.source == "ozb" else []) + (["accessory"] if o.accessory else [])
+        meta = [o.store] + ([f"{o.votes:+d} votes"] if o.source == "ozb" or (
+            o.source == "free" and o.store.startswith(("OzBargain", "Reddit"))) else []) + (["accessory"] if o.accessory else [])
         if o.oos:
             meta.append("out of stock")
         if o.used:
@@ -1966,7 +1967,7 @@ class App(tk.Tk):
             self.ozb_cat = "All deals"
         self.ozb_page = 0
         self.picking, self.pick_cells, self._pick_cols, self.daily_shuffle = None, [], {}, None
-        self.pick_sorts = {"daily": "Biggest savings", "foryou": "Newest", "ozb": "Newest", "free": "Newest"}
+        self.pick_sorts = {"daily": "Biggest savings", "foryou": "Newest", "ozb": "Newest", "free": "Most votes"}
         self.daily_cat = E.get_settings(E.db()).get("daily_cat") or "All"
         if self.daily_cat not in E.DAILY_CAT_NAMES:
             self.daily_cat = "All"
@@ -3704,10 +3705,11 @@ class App(tk.Tk):
         age = E.picks_age(con, E.ozb_kind(name))
         if free:
             got = ", ".join(f"{k} {v}" for k, v in (meta.get("srcs") or {}).items())
-            sub = (f"Developer preview. Free outright - {total} found ({got or 'no sources answered'}). OzBargain: first {depth} pages; "
-                   f"Epic and GamerPower (Steam, GOG and other giveaways, data from gamerpower.com) are checked for what is live now. "
-                   f"Anything that needs a purchase, gift card, membership tier, trial, sign-up or postage is left out. "
-                   f"Some are local or limited, so check the page. Updated {self.ago(age)}.")
+            sub = (f"Developer preview: games and apps that are free outright - {total} found ({got or 'no sources answered'}). "
+                   f"Official store giveaways come first, then the rest by votes. Sources: Epic, Steam, GOG, GamerPower (gamerpower.com), "
+                   f"Reddit's free-game and free-app boards, and the first {depth} pages of OzBargain's freebies, gaming, mobile and "
+                   f"computing deals (3+ votes). Anything needing a purchase, gift card, subscription, trial, sign-up or postage is left "
+                   f"out. Some are region-limited or run out of keys, so check the page. Updated {self.ago(age)}.")
             if meta.get("errors"):
                 sub += "  Couldn't reach: " + "; ".join(meta["errors"])[:200]
         else:
