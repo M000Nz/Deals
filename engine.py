@@ -37,7 +37,7 @@ from urllib.parse import parse_qs, quote, quote_plus, unquote, urlencode, urljoi
 import requests
 from bs4 import BeautifulSoup
 
-ENGINE_VERSION = 103
+ENGINE_VERSION = 104
 GITHUB_REPO = "M000Nz/Deals"
 GITHUB_API = "https://api.github.com"
 FROZEN = bool(getattr(sys, "frozen", False))                  # True when running as the packaged Deals.exe
@@ -4258,12 +4258,85 @@ def _great(o: Offer, min_price: float, min_pct: float, prev: dict | None = None,
     return pct
 
 
-def _store_pick(con, kind: str, o: Offer, pct: float, terms: str = ""):
+def _store_pick(con, kind: str, o: Offer, pct: float, terms: str = "", ts: float | None = None):
     base = o.was_price or o.ref_price
     con.execute("INSERT OR REPLACE INTO picks(kind,url,store,title,price,was,pct,image,source,expires,votes,terms,found_at,basis)"
                 " VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (kind, o.url, o.store, o.title, o.price, base, pct, o.image, o.source, o.expires, o.votes,
-                 terms, time.time(), "was" if o.was_price else "ref"))
+                 terms, ts or time.time(), "was" if o.was_price else "ref"))
+
+
+# ---- the OzBargain tab: live deals from the first pages of any OzBargain category ----
+OZB_CATS = [("All deals", "deals"), ("Electrical & Electronics", "cat/electrical-electronics"), ("Computing", "cat/computing"),
+            ("Gaming", "cat/gaming"), ("Home & Garden", "cat/home-garden"), ("Groceries", "cat/groceries"),
+            ("Fashion & Apparel", "cat/fashion-apparel"), ("Entertainment", "cat/entertainment"), ("Mobile", "cat/mobile"),
+            ("Automotive", "cat/automotive"), ("Alcohol", "cat/alcohol"), ("Health & Beauty", "cat/health-beauty"),
+            ("Sports & Outdoors", "cat/sports-outdoors"), ("Travel", "cat/travel")]
+OZB_CAT_NAMES = [n for n, _ in OZB_CATS]
+OZB_PATH = dict(OZB_CATS)
+OZB_PAGES = 5               # pages read by default
+OZB_MAX_PAGES = 25          # the most "load more" will go to
+OZB_STEP = 5                # pages added by each "load more"
+OZB_SHOW = 30               # deals shown per page in the tab
+OZB_EVERY = 30 * 60         # seconds before the tab reads the site again by itself
+
+
+def ozb_kind(name: str) -> str:
+    return "ozb:" + OZB_PATH.get(name, "deals")
+
+
+def ozb_meta(con, name: str) -> dict:
+    try:
+        return json.loads(get_settings(con).get("ozb_meta_" + OZB_PATH.get(name, "deals")) or "{}")
+    except (ValueError, TypeError):
+        return {}
+
+
+def refresh_ozb(name: str, pages: int = OZB_PAGES, progress=None, cancel=None) -> dict:
+    """Read the first `pages` pages of one OzBargain category (newest first) and save the deals that state a price."""
+    path = OZB_PATH.get(name, "deals")
+    pages = max(1, min(int(pages), OZB_MAX_PAGES))
+    base = f"{OZB_BASE}/{path}/feed"
+    texts: dict[int, str] = {}
+    errs: list[Exception] = []
+    done = 0
+    with ThreadPoolExecutor(max_workers=min(5, pages)) as ex:
+        futs = {ex.submit(fetch_cached, base + (f"?page={i}" if i else ""), 300,
+                          accept="application/rss+xml,application/xml,text/xml,*/*", ua=OZB_UA): i for i in range(pages)}
+        for f in as_completed(futs):
+            i = futs[f]
+            try:
+                texts[i] = f.result()
+            except FetchError as e:
+                errs.append(e)
+            done += 1
+            if progress:
+                progress(done, pages)
+            if cancel is not None and cancel.is_set():
+                return {"kept": 0, "pages": 0, "full": False}
+    if not texts:
+        raise errs[0] if errs else FetchError("OzBargain did not answer")
+    out, seen = [], set()
+    last_items = 0
+    got = max(texts)
+    for i in sorted(texts):
+        if i == got:
+            last_items = texts[i].count("<item")
+        for o in parse_ozb_feed(texts[i]):
+            if o.url not in seen:
+                seen.add(o.url)
+                out.append(o)
+    con = db()
+    kind = "ozb:" + path
+    con.execute("DELETE FROM picks WHERE kind=?", (kind,))
+    now = time.time()
+    for n, o in enumerate(out):
+        pct = round(100 * (o.was_price - o.price) / o.was_price, 1) if o.was_price else 0.0
+        _store_pick(con, kind, o, pct, path, ts=now - n * 0.001)       # keeps OzBargain's own newest-first order
+    meta = {"pages": got + 1, "full": last_items >= 20 and got + 1 >= pages, "kept": len(out), "items_last": last_items}
+    set_setting(con, "ozb_meta_" + path, json.dumps(meta))
+    con.commit()
+    return meta
 
 
 def pick_offers(con, kind: str, limit: int = 200, category: str = "All") -> list[Offer]:

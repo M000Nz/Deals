@@ -157,7 +157,7 @@ def ensure_deps():
 ensure_deps()
 import engine as E  # noqa: E402
 
-if getattr(E, "ENGINE_VERSION", 0) < 103:
+if getattr(E, "ENGINE_VERSION", 0) < 104:
     _r = tk.Tk()
     _r.withdraw()
     messagebox.showerror("Deals", "engine.py is out of date.\n\nReplace it with the new engine.py from the "
@@ -175,6 +175,7 @@ from ui_kit import RoundButton, Switch, PillEntry, ScrollFrame, Chart, draw_rrec
 CARD_W, IMG_W, IMG_H = 204, 184, 142        # logical sizes; multiplied by the screen scale at run time
 PAGE = 36
 WATCH_SORTS = ["Added", "Closest to target", "Biggest drop", "Last checked", "Name"]
+OZB_SORTS = ["Newest", "Most votes", "Biggest % off", "Biggest savings", "Price: low to high", "Price: high to low"]
 PICK_SORTS = ["Biggest savings", "Highest deal score", "Best reviews", "Biggest % off", "Price: high to low",
               "Price: low to high", "Newest", "Shuffled"]
 SORTS = ["Best match", "Best value", "Price: low to high", "Price: high to low", "Biggest discount", "Deal score", "Ending soon"]
@@ -1775,7 +1776,7 @@ class App(tk.Tk):
                 self.style(w, role)
             self.render_watch()
             self.render_results()
-            if self.view in ("daily", "foryou"):
+            if self.view in ("daily", "foryou", "ozb"):
                 self.render_picks(self.view)
             if self.view == "home":
                 self.refresh_home()
@@ -1864,11 +1865,14 @@ class App(tk.Tk):
             "daily": self.button(tabs, "Daily deals", lambda: self.show_picks("daily"), font=self.f_bold, pad=(18, 6),
                                  style="ghost"),
             "foryou": self.button(tabs, "For you", lambda: self.show_picks("foryou"), font=self.f_bold, pad=(18, 6),
-                                  style="ghost")}
+                                  style="ghost"),
+            "ozb": self.button(tabs, "OzBargain", lambda: self.show_picks("ozb"), font=self.f_bold, pad=(18, 6),
+                               style="ghost")}
         self.tab_btn["search"].pack(side="left", padx=(0, 4))
         self.tab_btn["watch"].pack(side="left", padx=(0, 4))
         self.tab_btn["daily"].pack(side="left", padx=(0, 4))
-        self.tab_btn["foryou"].pack(side="left")
+        self.tab_btn["foryou"].pack(side="left", padx=(0, 4))
+        self.tab_btn["ozb"].pack(side="left")
 
         if self.wants_frameless:                                    # our own minimise / maximise / close
             wb = self.frame(top)
@@ -1951,8 +1955,13 @@ class App(tk.Tk):
         self.watch = ScrollFrame(self, self.main)
         self.daily = ScrollFrame(self, self.main)
         self.foryou = ScrollFrame(self, self.main)
+        self.ozb = ScrollFrame(self, self.main)
+        self.ozb_cat = E.get_settings(E.db()).get("ozb_cat") or "All deals"
+        if self.ozb_cat not in E.OZB_CAT_NAMES:
+            self.ozb_cat = "All deals"
+        self.ozb_page = 0
         self.picking, self.pick_cells, self._pick_cols, self.daily_shuffle = None, [], {}, None
-        self.pick_sorts = {"daily": "Biggest savings", "foryou": "Newest"}
+        self.pick_sorts = {"daily": "Biggest savings", "foryou": "Newest", "ozb": "Newest"}
         self.daily_cat = E.get_settings(E.db()).get("daily_cat") or "All"
         if self.daily_cat not in E.DAILY_CAT_NAMES:
             self.daily_cat = "All"
@@ -1965,6 +1974,7 @@ class App(tk.Tk):
         self.watch_folded = {int(x) for x in (E.get_settings(E.db()).get("watch_folded") or "").split(",") if x.strip().isdigit()}
         self.daily.on_width = lambda w: self.on_pick_width("daily", w)
         self.foryou.on_width = lambda w: self.on_pick_width("foryou", w)
+        self.ozb.on_width = lambda w: self.on_pick_width("ozb", w)
         self.build_home()
         self.build_loading()
 
@@ -2305,6 +2315,7 @@ class App(tk.Tk):
         self.watch.outer.pack_forget()
         self.daily.outer.pack_forget()
         self.foryou.outer.pack_forget()
+        self.ozb.outer.pack_forget()
         self.loading.pack_forget()
         self.load_spin.stop()
 
@@ -2654,7 +2665,7 @@ class App(tk.Tk):
         self.set_status("listing restored")
         if self.view == "results":
             self.render_results()
-        elif self.view in ("daily", "foryou"):
+        elif self.view in ("daily", "foryou", "ozb"):
             self.render_picks(self.view)
 
     def report_price(self, o):
@@ -2676,7 +2687,7 @@ class App(tk.Tk):
         self.toast("Listing hidden", lambda: self.undo_hide(o))
         if self.view == "results":
             self.render_results()
-        elif self.view in ("daily", "foryou"):
+        elif self.view in ("daily", "foryou", "ozb"):
             self.render_picks(self.view)
 
     def star_tip(self, o):
@@ -2743,7 +2754,7 @@ class App(tk.Tk):
     def start_review_check(self):
         if self.rev_mode == "Off" or self.rev_busy:
             return
-        if self.view in ("daily", "foryou"):
+        if self.view in ("daily", "foryou", "ozb"):
             offers = [o for o in self.pick_pool if self.rev_pass(o, True)][:30]
         elif self.results:
             deals, others = self.order()
@@ -3357,20 +3368,92 @@ class App(tk.Tk):
     def show_picks(self, kind):
         self.view = kind
         self._hide_views()
-        sf = self.daily if kind == "daily" else self.foryou
+        sf = self._sf(kind)
         sf.outer.pack(fill="both", expand=True)
         self.set_tabs(kind)
         self.update_badge()
         con = E.db()
-        age = E.picks_age(con, kind)
-        stale = age is None or age > (E.DAILY_EVERY if kind == "daily" else 12 * 3600)
+        if kind == "ozb":
+            age = E.picks_age(con, E.ozb_kind(self.ozb_cat))
+            stale = age is None or age > E.OZB_EVERY
+        else:
+            age = E.picks_age(con, kind)
+            stale = age is None or age > (E.DAILY_EVERY if kind == "daily" else 12 * 3600)
         if self.picking == kind:
             sf.outer.pack_forget()
             self.show_loading(self.load_total, self.pick_title(kind))
+        elif kind == "ozb":
+            if stale and not self.picking and not self.searching:
+                self.refresh_ozb()
+            else:
+                self.render_picks(kind)
         elif stale and not self.picking and not self.searching and (kind == "daily" or E.interest_queries(con)):
             self.refresh_picks(kind)
         else:
             self.render_picks(kind)
+
+    def _sf(self, kind):
+        return {"daily": self.daily, "foryou": self.foryou, "ozb": self.ozb}[kind]
+
+    # ---- OzBargain tab ----
+    def refresh_ozb(self, pages=None):
+        if self.picking or self.searching:
+            self.cancel_running()
+        name = self.ozb_cat
+        depth = pages or E.OZB_PAGES
+        self.picking = "ozb"
+        self.pick_cancel = cancel = threading.Event()
+        self._sf("ozb").outer.pack_forget()
+        self.show_loading(depth, f"Reading {depth} pages of OzBargain {name}...")
+        self.load_sub.configure(text=f"0 of {depth} pages read")
+        self.set_status("reading OzBargain...")
+
+        def prog(d, t):
+            if not cancel.is_set():
+                self.q.put(lambda: (self.load_sub.configure(text=f"{d} of {t} pages read"), self.load_bar.set(d / max(t, 1)))
+                           if self.picking == "ozb" else None)
+
+        def work():
+            msg = ""
+            try:
+                E.refresh_ozb(name, depth, progress=prog, cancel=cancel)
+            except Exception as e:  # noqa: BLE001
+                log_error(traceback.format_exc())
+                msg = f"Couldn't read OzBargain just now ({e}). Try Refresh in a minute."
+            if not cancel.is_set():
+                self.q.put(lambda: self.picks_done("ozb", msg))
+        threading.Thread(target=work, daemon=True).start()
+
+    def set_ozb_cat(self, v):
+        self.ozb_cat, self.ozb_page = v, 0
+        E.set_setting(E.db(), "ozb_cat", v)
+        age = E.picks_age(E.db(), E.ozb_kind(v))
+        if age is None or age > E.OZB_EVERY:
+            self.refresh_ozb()
+        else:
+            self.stop_picks()
+            self.render_picks("ozb")
+
+    def ozb_goto(self, page):
+        self.ozb_page = page
+        self.render_picks("ozb")
+        self.after(30, lambda: self.ozb.canvas.yview_moveto(0))
+
+    def ozb_pager(self, parent, page, pages, more=None):
+        row = self.frame(parent)
+        row.pack(fill="x", padx=26, pady=(6, 6))
+        if pages > 1:
+            if page > 0:
+                self.button(row, "\u2039 Prev", lambda: self.ozb_goto(page - 1), pad=(12, 4), style="ghost").pack(side="left", padx=(0, 4))
+            lo = max(0, min(page - 3, pages - 7))
+            for n in range(lo, min(pages, lo + 7)):
+                self.button(row, str(n + 1), lambda n=n: self.ozb_goto(n), pad=(11, 4),
+                            style="solid" if n == page else "ghost").pack(side="left", padx=(0, 4))
+            if page < pages - 1:
+                self.button(row, "Next \u203a", lambda: self.ozb_goto(page + 1), pad=(12, 4), style="ghost").pack(side="left")
+        if more:
+            self.button(row, more[0], more[1], pad=(14, 4), style="solid").pack(side="right")
+        return row
 
     def shuffle_daily(self):
         self.daily_shuffle = random.randint(1, 10 ** 9)
@@ -3382,6 +3465,8 @@ class App(tk.Tk):
                 return self.shuffle_daily()
             v = "Newest"
         self.pick_sorts[kind] = v
+        if kind == "ozb":
+            self.ozb_page = 0
         if kind == "daily":
             self.daily_shuffle = None
         self.render_picks(kind)
@@ -3400,7 +3485,9 @@ class App(tk.Tk):
         mode = self.pick_sorts.get(kind, "Newest")
         save = lambda o: max(0.0, (o.was_price or o.ref_price or 0) - o.price)
         pctoff = lambda o: save(o) / (o.was_price or o.ref_price or 1)
-        if mode == "Biggest savings":
+        if mode == "Most votes":
+            offers.sort(key=lambda o: -(o.votes or 0))
+        elif mode == "Biggest savings":
             offers.sort(key=lambda o: -save(o))
         elif mode == "Biggest % off":
             offers.sort(key=lambda o: -pctoff(o))
@@ -3440,6 +3527,8 @@ class App(tk.Tk):
             self.render_picks("daily")
 
     def pick_title(self, kind):
+        if kind == "ozb":
+            return f"Reading OzBargain {self.ozb_cat}..."
         if kind == "daily" and getattr(self, "daily_cat", "All") != "All":
             return f"Finding the best {self.daily_cat} deals..."
         return ("Finding today's biggest discounts..." if kind == "daily" else "Looking for deals you might like...")
@@ -3501,18 +3590,20 @@ class App(tk.Tk):
         self.set_status("ready")
         if self.view == kind:
             self.hide_loading()
-            (self.daily if kind == "daily" else self.foryou).outer.pack(fill="both", expand=True)
+            self._sf(kind).outer.pack(fill="both", expand=True)
             self.render_picks(kind)
 
     def render_picks(self, kind):
         if self.view != kind or self.picking == kind:
             return
-        sf = self.daily if kind == "daily" else self.foryou
+        sf = self._sf(kind)
         self._watch_keys = None
         sf.clear()
         self.prune()
         self.thumb_targets, self.cards_by_url, self._typical = {}, {}, None
         inner, sym, con = sf.inner, self.sym(), E.db()
+        if kind == "ozb":
+            return self.render_ozb(sf, inner, sym, con)
         offers = E.pick_offers(con, kind, category=self.daily_cat if kind == "daily" else "All")
         self.sort_picks(offers, kind, con)
         self.pick_pool = list(offers[:80 if kind == "daily" else 60])
@@ -3566,6 +3657,46 @@ class App(tk.Tk):
                 anchor="w", padx=26, pady=(0, 8))
         if self.rev_mode != "Off" and not self.rev_busy and any(o.url not in self.rev_info for o in self.pick_pool):
             self.after(50, self.start_review_check)
+
+    def render_ozb(self, sf, inner, sym, con):
+        name = self.ozb_cat
+        offers = E.pick_offers(con, E.ozb_kind(name), limit=2000)
+        self.sort_picks(offers, "ozb", con)
+        self.pick_pool = []
+        meta = E.ozb_meta(con, name)
+        total = len(offers)
+        pages = max(1, -(-total // E.OZB_SHOW))
+        self.ozb_page = max(0, min(self.ozb_page, pages - 1))
+        page = self.ozb_page
+        depth = int(meta.get("pages") or E.OZB_PAGES)
+        hdr = self.frame(inner)
+        hdr.pack(fill="x", padx=26, pady=(18, 2))
+        self.label(hdr, "OzBargain", font=self.f_page).pack(side="left")
+        self.dropdown(hdr, "category: ", E.OZB_CAT_NAMES, lambda: self.ozb_cat, self.set_ozb_cat).pack(side="left", padx=(18, 0))
+        self.button(hdr, "Refresh", lambda: self.refresh_ozb(), pad=(14, 5)).pack(side="right")
+        self.dropdown(hdr, "sort: ", OZB_SORTS, lambda: self.pick_sorts.get("ozb", "Newest"),
+                      lambda v: self.set_pick_sort("ozb", v)).pack(side="right", padx=(0, 10))
+        age = E.picks_age(con, E.ozb_kind(name))
+        sub = (f"Live OzBargain deals from the first {depth} pages of {name}: {total} that state a price "
+               f"(deals like '20% off sitewide' have no item price, so they aren't shown). Updated {self.ago(age)}.")
+        self.label(inner, sub, "muted", font=self.f_small, wraplength=760, justify="left").pack(anchor="w", padx=26, pady=(0, 4))
+        more = None
+        if meta.get("full") and depth < E.OZB_MAX_PAGES:
+            nxt = min(E.OZB_MAX_PAGES, depth + E.OZB_STEP)
+            more = (f"Load pages {depth + 1}-{nxt}", lambda n=nxt: self.refresh_ozb(n))
+        if not offers:
+            note = getattr(self, "pick_msg", "") or "Nothing came back. Press Refresh."
+            self.label(inner, note, font=self.f_big).pack(anchor="w", padx=26, pady=(14, 0))
+            self.pick_msg = ""
+            return
+        shown = offers[page * E.OZB_SHOW:(page + 1) * E.OZB_SHOW]
+        self.ozb_pager(inner, page, pages, more)
+        self.card_grid(inner, shown, sym, sf=sf)
+        if HAS_PIL:
+            self.load_thumbs(list(self.thumb_targets))
+        self.label(inner, f"Showing {page * E.OZB_SHOW + 1}-{page * E.OZB_SHOW + len(shown)} of {total}", "muted",
+                   font=self.f_small).pack(anchor="w", padx=26, pady=(8, 0))
+        self.ozb_pager(inner, page, pages, more)
 
     def reset_foryou(self):
         if not messagebox.askyesno("Reset recommended", "This clears everything For you has learned (your Interested / Not "
