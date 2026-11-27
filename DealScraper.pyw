@@ -157,7 +157,7 @@ def ensure_deps():
 ensure_deps()
 import engine as E  # noqa: E402
 
-if getattr(E, "ENGINE_VERSION", 0) < 105:
+if getattr(E, "ENGINE_VERSION", 0) < 106:
     _r = tk.Tk()
     _r.withdraw()
     messagebox.showerror("Deals", "engine.py is out of date.\n\nReplace it with the new engine.py from the "
@@ -1357,7 +1357,7 @@ class Card(tk.Canvas):
             self.create_text(x, y, anchor="nw", text=ln, font=f["title"], fill=P["fg"])
             y += self.lt
         y = pad + ih + px(8) + 2 * self.lt + px(4)
-        price = "FREE" if o.source == "ozb-free" else E.money(self.sym, o.price)
+        price = "FREE" if o.source in ("free", "ozb-free") else E.money(self.sym, o.price)
         self.create_text(x, y, anchor="nw", text=price, font=f["price"], fill=P["accent"] if kind else P["fg"])
         if kind == "markdown" and o.was_price:
             self.create_text(x + f["price"].measure(price) + px(8), y + (self.lp - self.ls) // 2 + px(1), anchor="nw",
@@ -3703,10 +3703,13 @@ class App(tk.Tk):
                       lambda v: self.set_pick_sort(kind, v)).pack(side="right", padx=(0, 10))
         age = E.picks_age(con, E.ozb_kind(name))
         if free:
-            sub = (f"Developer preview. Free outright from the first {depth} pages of OzBargain: {total} found. Anything that needs "
-                   f"a purchase, gift card, membership tier, trial or postage is left out. Check the deal page before you go - "
-                   f"some are local or limited. Updated {self.ago(age)}"
-                   + (f"  (source: {meta['src']})" if meta.get("src") else "") + ".")
+            got = ", ".join(f"{k} {v}" for k, v in (meta.get("srcs") or {}).items())
+            sub = (f"Developer preview. Free outright - {total} found ({got or 'no sources answered'}). OzBargain: first {depth} pages; "
+                   f"Epic and GamerPower (Steam, GOG and other giveaways, data from gamerpower.com) are checked for what is live now. "
+                   f"Anything that needs a purchase, gift card, membership tier, trial, sign-up or postage is left out. "
+                   f"Some are local or limited, so check the page. Updated {self.ago(age)}.")
+            if meta.get("errors"):
+                sub += "  Couldn't reach: " + "; ".join(meta["errors"])[:200]
         else:
             sub = (f"Live OzBargain deals from the first {depth} pages of {name}: {total} that state a price "
                    f"(deals like '20% off sitewide' have no item price, so they aren't shown). Updated {self.ago(age)}.")
