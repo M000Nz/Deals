@@ -157,7 +157,7 @@ def ensure_deps():
 ensure_deps()
 import engine as E  # noqa: E402
 
-if getattr(E, "ENGINE_VERSION", 0) < 110:
+if getattr(E, "ENGINE_VERSION", 0) < 111:
     _r = tk.Tk()
     _r.withdraw()
     messagebox.showerror("Deals", "engine.py is out of date.\n\nReplace it with the new engine.py from the "
@@ -5121,6 +5121,7 @@ class App(tk.Tk):
     def restart_app(self):
         try:
             args = sys.argv[1:] if FROZEN else sys.argv
+            E.single_release()                                  # so the new copy doesn't think this one is still running
             subprocess.Popen([sys.executable] + args, cwd=os.path.dirname(os.path.abspath(sys.argv[0])) or None,
                              env=E.clean_env())
         except OSError:
@@ -5390,11 +5391,28 @@ def main():
             sys.setswitchinterval(0.002)              # background threads hand the window its turn sooner (default 5 ms)
         except Exception:  # noqa: BLE001
             pass
+        if E.single_instance() == "other":          # Deals is already running (maybe in the tray): it has been brought forward
+            return
         E.start_resource_log()
-        App().mainloop()
+        app = App()
+
+        def show():                                 # called from the lock's thread when a second copy is opened
+            ev = threading.Event()
+
+            def go():
+                try:
+                    app.show_window()
+                    ev.set()
+                except Exception:  # noqa: BLE001
+                    log_error(traceback.format_exc())
+            app.q.put(go)
+            return ev.wait(3)
+        E.single_serve(show)
+        app.mainloop()
     except Exception:  # noqa: BLE001
         err = traceback.format_exc()
         log_error(err)
+        E.single_release()
         if sys.platform == "win32" and "--classic" not in sys.argv:
             try:                                           # the custom window frame may be the cause: try the normal one
                 args = (sys.argv[1:] if FROZEN else sys.argv) + ["--classic"]

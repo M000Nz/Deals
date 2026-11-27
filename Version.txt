@@ -1,5 +1,6 @@
-110
+111
 https://github.com/M000Nz/Deals
+note: v111: Only one copy of Deals runs at a time - opening it again brings the running one to the front instead of starting another
 note: v110: Removed the developer-only Freebies preview
 note: v108: Update page: only what's new since the version you have is shown; if you are several versions behind it lists each missed version
 note: v104: New OzBargain tab - live deals from the first 5 pages of any category, with page numbers, sorting and a button to load more pages

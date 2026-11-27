@@ -25,6 +25,7 @@ from concurrent.futures import TimeoutError as FutTimeout
 from dataclasses import dataclass, field, replace
 import csv
 import os
+import socket
 import shutil
 import html as _html
 import xml.etree.ElementTree as ET
@@ -37,7 +38,7 @@ from urllib.parse import parse_qs, quote, quote_plus, unquote, urlencode, urljoi
 import requests
 from bs4 import BeautifulSoup
 
-ENGINE_VERSION = 110
+ENGINE_VERSION = 111
 GITHUB_REPO = "M000Nz/Deals"
 GITHUB_API = "https://api.github.com"
 FROZEN = bool(getattr(sys, "frozen", False))                  # True when running as the packaged Deals.exe
@@ -2116,6 +2117,90 @@ def _host_sem(store: dict):
     host = urlparse(store["search_url"].replace("{query}", "x")).netloc or store["name"]
     with _HOST_LOCK:
         return _HOST_SEMS.setdefault(host, threading.Semaphore(2))
+
+
+# ---- one copy at a time ----
+_SINGLE_PORT = 47653                # a loopback port the running copy listens on; a second copy asks it to show itself
+_single_sock = None
+
+
+def _single_user() -> bytes:
+    try:
+        return os.environ.get("USERNAME", os.environ.get("USER", "")).encode("utf-8", "ignore")[:40]
+    except Exception:  # noqa: BLE001
+        return b""
+
+
+def single_instance() -> str:
+    """'first' (we now hold the lock), 'other' (Deals is already running and was asked to come to the front) or 'unknown'
+    (couldn't tell - start normally, never block the app because of this check)."""
+    global _single_sock
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        if sys.platform == "win32" and hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        elif sys.platform != "win32":
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)    # a just-closed copy's leftovers don't block the lock
+        s.bind(("127.0.0.1", _SINGLE_PORT))
+        s.listen(4)
+        _single_sock = s
+        return "first"
+    except OSError:
+        s.close()
+    try:
+        c = socket.create_connection(("127.0.0.1", _SINGLE_PORT), timeout=2)
+        try:
+            c.sendall(b"show\n")
+            c.settimeout(4)
+            reply = c.recv(100)
+        finally:
+            c.close()
+        if reply.startswith(b"deals " + _single_user()):
+            return "other"
+    except OSError:
+        pass
+    return "unknown"
+
+
+def single_serve(show) -> None:
+    """Answer 'show' requests from a second copy. `show()` must bring the window up and return True once it has."""
+    sock = _single_sock
+    if sock is None:
+        return
+
+    def loop():
+        while True:
+            try:
+                conn, _ = sock.accept()
+            except OSError:
+                return                                   # released
+            try:
+                conn.settimeout(3)
+                if conn.recv(20).startswith(b"show"):
+                    if show():
+                        conn.sendall(b"deals " + _single_user() + b"\n")
+                    else:
+                        conn.sendall(b"busy\n")
+            except (OSError, Exception):  # noqa: BLE001
+                pass
+            finally:
+                try:
+                    conn.close()
+                except OSError:
+                    pass
+    threading.Thread(target=loop, daemon=True, name="single-instance").start()
+
+
+def single_release() -> None:
+    """Let go of the lock (before this copy starts its own replacement)."""
+    global _single_sock
+    if _single_sock is not None:
+        for fn in (lambda: _single_sock.shutdown(socket.SHUT_RDWR), lambda: _single_sock.close()):
+            try:
+                fn()                                           # shutdown first so a waiting accept() lets go
+            except OSError:
+                pass
+        _single_sock = None
 
 
 def lower_priority():
