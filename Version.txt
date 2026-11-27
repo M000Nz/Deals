@@ -1,58 +1,12 @@
-107
-note: Freebies (developer mode) now also leave out anything tied to a subscription, auto-renewal, card details or a limited free period such as "free for 3 months"
+108
 https://github.com/M000Nz/Deals
-note: Lower CPU and a smoother window while searching: at most 2 shop pages are read at once (so the window gets its turn), pictures/styles/frames are skipped when reading pages, the browser skips more background traffic, the results list redraws less often while it fills, and several small background checks were trimmed
-note: Smoother over time: product pictures from earlier searches are now released instead of piling up in memory, the rounded-picture mask is built once, old cached shop results are cleared out, and idle background wake-ups are fewer
-note: Search matching fix: short words like 'Pro', 'Max' or 'Air' no longer match the start of longer words ('Pro' matched 'Protective', so a Garmin Striker sun cover showed up for 'Garmin epix Pro')
-note: Watchlist safeguard: a listing priced far below the item's usual price with no real 'was' price (e.g. a $35 strap for a $1,100 watch) is no longer treated as the product, and such points already in the price history are cleared on the next check
-note: Watchlist: the low/high, usual price and advice text now lines up at the same spot in every row
-note: Second pass now retries general shops first (Officeworks, Spotlight, home and DIY shops...) and leaves specialist shops (fashion, beauty, music, wine...) to the end, so the shops most likely to stock an unusual product get their second go
-note: A large 'Still searching' banner now sits at the top of the results (with a live count and progress bar) while shops are still answering, and again while slow shops get their second go
-note: Watchlist cards: the low/high, usual price and buy-or-wait text now sit to the left of the graph, and the graph is taller
-note: Second pass: shops that were 'too slow' get another go in the background once the first results are showing; anything they find is added to the list (with a small message), keeping your place on the page
-note: New shop: SIHOO Australia (their own site - M57 Pro and the rest of the range, read from the shop's product feed)
-note: Amazon results whose heading shows only the brand now use the full product name from the picture label
-note: Developer report now lists every Amazon result in page order, to find out why a product (e.g. a watch) is missing from Amazon's results
-note: Amazon (and other big marketplaces) now start first and the search waits for them, so products only Amazon stocks (new watches, etc.) are no longer skipped as 'too slow'
-note: 'Why these results?' now shows any crossed-out price; with developer mode on it also shows where each result came from (the shop's own search, StaticICE or OzBargain) and the outcome of the price re-check
-note: New quiet link at the bottom of search results: 'Show N hidden listings' reveals everything left out (filtered by your used / accessories settings, too-cheap listings, hidden sites and listings you reported), grouped by reason
-note: Slowdown protection: the hidden browser now closes itself after 4 quiet minutes (it restarts on its own when needed) and abandoned page loads are cancelled; Deals now logs its memory, handles and helper processes once a minute (resources.log) and diagnostics include it
-note: Searches: the early 'most shops are in, stop waiting' cut-off no longer drops browser shops (Amazon...) that are still loading; the search report now shows the engine version and how long each shop took
-note: Searches: shops that need the hidden browser (Amazon, Big W, Officeworks...) now run in their own lane from the start instead of waiting behind every plain shop, so they stop being 'too slow' on busy searches
-note: Amazon: results that show only a 'from $...' price (several sellers or options) are no longer skipped; the developer report shows how many Amazon cards had no price
-note: OzBargain: busy tags now also read the second page of the feed, so live deals pushed off the first page by newer posts (e.g. during Black Friday) can still be found
-note: Developer mode: the search report lists the OzBargain items returned for a search
-note: Price corrections now appear one by one as each shop page is checked (best matches first), instead of all at the end
-note: While prices are being confirmed against the shops' own pages, a large centred 'Confirming the best prices...' banner sits at the top of the results (above Deals), and the results line shows a matching moving note
-note: Searches are faster: the shop-page price check (JB Hi-Fi and others) now runs after the results appear and updates the cards in place, instead of making you wait for it
-note: Price fix: JB Hi-Fi (and Bing Lee / Betta) prices that come from price-comparison listings are now re-checked against the shop's own product page, so sale prices show instead of the old regular price
-note: Amazon results are now read from Amazon's own result markup: correct titles (they were showing pieces like '. 99 RRP'), the price you pay vs the crossed-out RRP, and clean product links
-note: Diagnostics now include a price audit (JB Hi-Fi, Bing Lee, Betta Home Living, Amazon): what Deals read for each product next to the shop's own page markup, so wrong prices can be fixed from real pages
-note: Product pictures: the + and star buttons are now clean round buttons (no square corners over light photos), and their hint labels sit on the picture inside the card instead of getting cut off
-note: New source: Cash Converters (second-hand, always labelled 'refurbished / used')
-note: Fixed the 'Why these results?' window showing black text on a black background
-note: Searches no longer run out of time on the shops that matter: shops are now searched price-comparison sites first, then shops that sell that kind of product, then the rest (it used to be alphabetical, so Mwave, Scorptec, Umart and StaticICE were often skipped), with 12 searches at once
-note: Router, Wi-Fi and mesh brand words (TP-Link, Archer, Deco, Netgear...) now count as tech so those searches go to tech shops
-note: 'Why these results?' now shows what the shops sent back when few results match
-note: Lighter and smoother: the database is now set up once instead of on every call, product-review checks fetch fewer pages at a time, live results redraw at most every few seconds, graphs redraw only when resized, and the picture cache no longer empties all at once
-note: New 'Why these results?' button under a search shows which shops answered, how many listings came back and what was filtered; the same report goes into diagnostics (last_search.txt)
-note: New Alerts window: plain step-by-step instructions for the phone (ntfy), Discord, Telegram and email options, a button that makes you a private phone name, and a Send a test button on each that tells you if it worked or why not
-note: Daily digest 'Send a test now' now shows a progress card, explains when it can't run, and is faster
-note: For you: Find more now replaces the whole page with fresh suggestions (nothing piles up), and never repeats ones you were already shown
-note: For you: Interested and Not interested now visibly work - half of each search round follows what you liked, Interested looks for similar deals straight away, and Not interested also clears the same brand and type
-note: New opt-in daily deals digest (Settings > daily deals digest): pick up to 5 categories and get the best fresh deals in just those, once a day
-note: Find more / Refresh / changing the Daily deals category now takes over straight away - it stops whatever search or scan is still running
-note: Result cards show 'Seen as low as $X (3 weeks ago)' for products Deals has priced before, even ones you don't follow
-note: Starting a new search now stops the one still running, so the search you want is never held up
-note: Watchlist graph: the 'target' and 'usual' labels sit in a left margin beside their lines instead of over the graph
-note: Discount codes are now read from the wording of OzBargain posts (e.g. 'use code SAVE10'); gift-card, cashback and bank offers are still never shown
-note: OzBargain results now show a real discount code and its end date when the post lists one (gift-card, cashback and bank offers are never shown). Turn off in Settings > coupon codes
-note: Results appear as soon as the first shops answer, and keep improving while slower shops finish (no more waiting for the slowest one)
-note: Pasted links: results are checked against the product's barcode or model code - confirmed matches show 'same product' and different models are left out
-note: Watchlist: clear Buy now / Wait / Fair price advice, what it is based on, and how often the price tends to drop
-note: Fixed a Cyber Monday date error that could appear in some years
-note: The Sources window opens instantly and fills in as it goes (no more blank list), and the menus drop down without a flash
-note: Testing: Hide only hides the progress card - press Test all again, or the new Show progress button (only visible while testing), to bring it back
-note: Watchlist: the graph is centred and the buttons sit at the far right when items are expanded
-note: Testing a single shop now shows a card with a moving bar, the seconds so far and what it is doing right now (loading the page, reading prices, opening the hidden browser, retrying after a bot check...)
-note: Fewer screen redraws while a test runs, so the window stays responsive
+note: v108: Update page: only what's new since the version you have is shown; if you are several versions behind it lists each missed version
+note: v107: Freebies (developer mode) leave out anything tied to a subscription, auto-renewal, card details or a limited free period
+note: v106: Freebies (developer mode) now also check Epic free games and GamerPower giveaways (Steam, GOG and more), with no strings attached
+note: v105: Developer mode: a Freebies tab showing OzBargain deals that are free outright
+note: v104: New OzBargain tab - live deals from the first 5 pages of any category, with page numbers, sorting and a button to load more pages
+note: v103: Fragrance searches now show only fragrances - sunglasses, makeup and bags from the same brand are left out
+note: v102: The update page now fits the window; Daily deals searches go only to the shops that suit each item
+note: v101: Watchlist rows show when each item was last checked and what it alerts on, beside the graph
+note: v100: Watchlist graphs now line up in every row
+note: v99: Luxury and perfume search with new shop groups; big shops (JB Hi-Fi, Harvey Norman, Bing Lee, Amazon and more) are never paused; the Sources window has a search box and scrolls smoothly; the developer report names paused shops

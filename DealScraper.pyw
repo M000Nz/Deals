@@ -157,7 +157,7 @@ def ensure_deps():
 ensure_deps()
 import engine as E  # noqa: E402
 
-if getattr(E, "ENGINE_VERSION", 0) < 107:
+if getattr(E, "ENGINE_VERSION", 0) < 108:
     _r = tk.Tk()
     _r.withdraw()
     messagebox.showerror("Deals", "engine.py is out of date.\n\nReplace it with the new engine.py from the "
@@ -5006,9 +5006,10 @@ class App(tk.Tk):
         lab("A new version of Deals is ready", self.f_page)
         lab(f"Version {m['version']}   (you have {E.ENGINE_VERSION})", self.f_big, P["accent"]).pack_configure(pady=(6, 14))
         notes = []
-        if m.get("notes"):
+        shown = E.notes_since(m.get("notes") or [], E.ENGINE_VERSION, m["version"])
+        if shown:
             lab("What's new", self.f_small_b, P["muted"])
-            for n in m["notes"][:8]:
+            for n in shown:
                 w = lab("\u2022  " + n, self.f_norm, wraplength=px(520))
                 w.pack_configure(pady=(2, 0))
                 notes.append(w)

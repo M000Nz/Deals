@@ -37,7 +37,7 @@ from urllib.parse import parse_qs, quote, quote_plus, unquote, urlencode, urljoi
 import requests
 from bs4 import BeautifulSoup
 
-ENGINE_VERSION = 107
+ENGINE_VERSION = 108
 GITHUB_REPO = "M000Nz/Deals"
 GITHUB_API = "https://api.github.com"
 FROZEN = bool(getattr(sys, "frozen", False))                  # True when running as the packaged Deals.exe
@@ -3675,6 +3675,28 @@ def update_manifest(url: str) -> dict | None:
         return m
     except (requests.RequestException, ValueError, IndexError):
         return None
+
+
+def notes_since(notes: list[str], have: int, latest: int, limit: int = 8) -> list[str]:
+    """What to show under "What's new". Each release note starts with its version ('v107: ...'). One version behind: just
+    the newest version's notes. Several behind: the notes of every version you missed, newest first, each marked with its
+    version. Notes without a version tag (older format) are shown as they are, but only a few."""
+    tagged: list[tuple[int, str]] = []
+    plain: list[str] = []
+    for n in notes:
+        m = re.match(r"(?i)\s*v(\d+)\s*[:\-]\s*(.+)", n)
+        if m:
+            tagged.append((int(m.group(1)), m.group(2).strip()))
+        else:
+            plain.append(n)
+    if not tagged:
+        return plain[:3]
+    missed = sorted((t for t in tagged if t[0] > have), key=lambda t: -t[0])
+    if not missed:
+        return []
+    if latest - have <= 1 or len({v for v, _ in missed}) == 1:
+        return [t for _, t in missed][:limit]
+    return [f"v{v}: {t}" for v, t in missed][:limit]
 
 
 def release_manifest(repo: str | None = None) -> dict | None:
